@@ -279,8 +279,21 @@ for (const btn of document.querySelectorAll('#tabs .tab')) {
     document.getElementById(`view-${btn.dataset.view}`).classList.remove('hidden');
     const loader = loaders[btn.dataset.view];
     if (loader) loader();
+    closeSidebar();
   });
 }
+
+// ── mobile sidebar ──────────────────────────────────────
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebar-backdrop').classList.remove('hidden');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-backdrop').classList.add('hidden');
+}
+document.getElementById('menu-toggle').addEventListener('click', openSidebar);
+document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
 
 // ── dashboard ────────────────────────────────────────────
 async function loadDashboard() {

@@ -7,8 +7,13 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+<div class="mobile-bar">
+  <button id="menu-toggle" aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <span class="mobile-title">FC Cleaning <b>CRM</b></span>
+</div>
+<div id="sidebar-backdrop" class="hidden"></div>
 <div class="app">
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="logo"><span>FC Cleaning</span> <b>CRM</b><div class="tagline">Self-hosted CRM ops</div></div>
     <nav id="tabs">
       <button data-view="dashboard" class="tab active">
