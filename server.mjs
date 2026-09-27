@@ -1,6 +1,6 @@
 import express from 'express';
 import pg from 'pg';
-import { runDueSteps, enroll } from './lib/engine.mjs';
+import { runDueSteps, enroll, getSettings, saveSettings } from './lib/engine.mjs';
 import { emailConfigured } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
 
@@ -213,6 +213,38 @@ app.patch('/api/appointments/:id', async (req, res) => {
     [req.params.id, ...updates.map((k) => req.body[k])]
   );
   res.json(rows[0]);
+});
+
+app.get('/api/activity', async (req, res) => {
+  const { rows } = await pool.query(
+    `select e.*, c.business from events e join contacts c on c.id = e.contact_id order by e.at desc limit 15`
+  );
+  res.json(rows);
+});
+
+// ── settings + suppression ─────────────────────────────
+app.get('/api/settings', async (req, res) => res.json(await getSettings(pool)));
+app.put('/api/settings', async (req, res) => res.json(await saveSettings(pool, req.body)));
+
+app.get('/api/suppression', async (req, res) => {
+  const { rows } = await pool.query('select * from suppression order by created_at desc');
+  res.json(rows);
+});
+
+app.post('/api/suppression', async (req, res) => {
+  const { email, reason } = req.body;
+  if (!email) return res.status(400).json({ error: 'email required' });
+  const { rows } = await pool.query(
+    `insert into suppression (email, reason) values ($1,$2)
+     on conflict (email) do update set reason = excluded.reason returning *`,
+    [email.toLowerCase(), reason || 'manual']
+  );
+  res.status(201).json(rows[0]);
+});
+
+app.delete('/api/suppression/:email', async (req, res) => {
+  await pool.query('delete from suppression where email = $1', [req.params.email.toLowerCase()]);
+  res.status(204).end();
 });
 
 app.use(express.static('public'));

@@ -5,6 +5,7 @@ const STAGES = [
   ['won', 'Won'],
   ['lost', 'Lost'],
 ];
+const STAGE_LABEL = Object.fromEntries(STAGES);
 
 let contacts = [];
 
@@ -17,13 +18,21 @@ async function api(path, opts) {
   return res.status === 204 ? null : res.json();
 }
 
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+function pill(stage) { return `<span class="pill pill-${stage}">${escapeHtml(STAGE_LABEL[stage] || stage)}</span>`; }
+
 async function loadContacts() {
   contacts = await api('/api/contacts');
   renderBoard();
+  renderProspects();
 }
 
+// ── pipeline (kanban) ────────────────────────────────────
 function renderBoard() {
   const board = document.getElementById('board');
+  if (!board) return;
   board.innerHTML = '';
   for (const [stage, label] of STAGES) {
     const col = document.createElement('div');
@@ -50,7 +59,7 @@ function renderBoard() {
 
 function renderCard(c) {
   const card = document.createElement('div');
-  card.className = 'card';
+  card.className = 'card kanban-card';
   card.draggable = true;
   card.innerHTML = `<div class="biz">${escapeHtml(c.business || '(no name)')}</div>
     <div class="meta">${escapeHtml(c.contact_name || c.email || c.phone || '')}</div>`;
@@ -59,9 +68,41 @@ function renderCard(c) {
   return card;
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+// ── prospects (table) ───────────────────────────────────
+function renderProspects() {
+  const tbody = document.getElementById('prospects-tbody');
+  if (!tbody) return;
+  const q = (document.getElementById('prospects-search').value || '').toLowerCase();
+  const stageFilter = document.getElementById('prospects-filter').value;
+  const rows = contacts.filter((c) => {
+    if (stageFilter && c.pipeline_stage !== stageFilter) return false;
+    if (!q) return true;
+    return (c.business || '').toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q) || (c.contact_name || '').toLowerCase().includes(q);
+  });
+  document.getElementById('prospects-count').textContent = `${rows.length} shown. Search or filter by pipeline stage.`;
+  tbody.innerHTML = '';
+  for (const c of rows) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(c.business || '(no name)')}</td><td>${escapeHtml(c.email || '')}</td>
+      <td>${escapeHtml(c.phone || '')}</td><td>${escapeHtml(c.source || '')}</td><td>${pill(c.pipeline_stage)}</td>`;
+    tr.addEventListener('click', () => openDrawer(c.id));
+    tbody.appendChild(tr);
+  }
 }
+
+const filterSelect = document.getElementById('prospects-filter');
+for (const [v, l] of STAGES) filterSelect.insertAdjacentHTML('beforeend', `<option value="${v}">${l}</option>`);
+document.getElementById('prospects-search').addEventListener('input', renderProspects);
+filterSelect.addEventListener('change', renderProspects);
+
+document.getElementById('new-contact-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  await api('/api/contacts', { method: 'POST', body: JSON.stringify(body) });
+  e.target.reset();
+  loadContacts();
+});
 
 // ── drawer ──────────────────────────────────────────────
 async function openDrawer(id) {
@@ -84,11 +125,11 @@ async function openDrawer(id) {
     <div class="field"><label>Email</label><input id="f-email" value="${escapeHtml(c.email || '')}" /></div>
     <div class="field"><label>Phone</label><input id="f-phone" value="${escapeHtml(c.phone || '')}" /></div>
     <div class="field"><label>Source</label><input id="f-source" value="${escapeHtml(c.source || '')}" /></div>
-    <div style="margin-top:10px"><button class="btn-primary" id="save-btn">Save</button>
+    <div style="margin-top:10px;display:flex;gap:8px"><button class="btn-primary" id="save-btn">Save</button>
       <button class="btn-secondary" id="delete-btn">Delete</button></div>
 
     <div class="section">
-      <label style="font-size:12px;color:#64748b">Add note</label>
+      <label style="font-size:12px;color:var(--text-dim)">Add note</label>
       <textarea id="note-input" rows="2" placeholder="Note..."></textarea>
       <button class="btn-secondary" id="note-btn" style="margin-top:6px">Add note</button>
     </div>
@@ -116,6 +157,7 @@ async function openDrawer(id) {
   `;
 
   const tasksList = drawer.querySelector('#tasks-list');
+  if (!tasks.length) tasksList.innerHTML = '<div class="empty">No tasks.</div>';
   for (const t of tasks) {
     const row = document.createElement('div');
     row.className = 'task' + (t.done ? ' done' : '');
@@ -127,7 +169,7 @@ async function openDrawer(id) {
   }
 
   const apptsList = drawer.querySelector('#appts-list');
-  if (!appts.length) apptsList.innerHTML = '<div class="meta">None scheduled.</div>';
+  if (!appts.length) apptsList.innerHTML = '<div class="empty">None scheduled.</div>';
   for (const a of appts) {
     const row = document.createElement('div');
     row.className = 'event';
@@ -136,7 +178,7 @@ async function openDrawer(id) {
   }
 
   const eventsList = drawer.querySelector('#events-list');
-  if (!events.length) eventsList.innerHTML = '<div class="meta">No activity yet.</div>';
+  if (!events.length) eventsList.innerHTML = '<div class="empty">No activity yet.</div>';
   for (const ev of events) {
     const row = document.createElement('div');
     row.className = 'event';
@@ -193,44 +235,48 @@ function closeDrawer() {
 }
 document.getElementById('drawer-backdrop').addEventListener('click', closeDrawer);
 
-// ── new contact modal ───────────────────────────────────
-const newBackdrop = document.getElementById('new-modal-backdrop');
-document.getElementById('new-contact-btn').addEventListener('click', () => newBackdrop.classList.remove('hidden'));
-document.getElementById('new-modal-cancel').addEventListener('click', () => newBackdrop.classList.add('hidden'));
-document.getElementById('new-contact-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const body = Object.fromEntries(fd.entries());
-  await api('/api/contacts', { method: 'POST', body: JSON.stringify(body) });
-  e.target.reset();
-  newBackdrop.classList.add('hidden');
-  loadContacts();
-});
-
 // ── tabs ─────────────────────────────────────────────────
+const loaders = { dashboard: loadDashboard, campaigns: loadCampaignsView, settings: loadSettingsView };
 for (const btn of document.querySelectorAll('#tabs .tab')) {
   btn.addEventListener('click', () => {
     document.querySelectorAll('#tabs .tab').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
-    for (const el of document.querySelectorAll('main > section')) el.classList.add('hidden');
-    const view = document.getElementById(`view-${btn.dataset.view}`);
-    view.classList.remove('hidden');
-    if (btn.dataset.view === 'campaigns') loadCampaigns();
-    if (btn.dataset.view === 'calendar') loadAppointments();
+    for (const el of document.querySelectorAll('main .view')) el.classList.add('hidden');
+    document.getElementById(`view-${btn.dataset.view}`).classList.remove('hidden');
+    const loader = loaders[btn.dataset.view];
+    if (loader) loader();
   });
 }
 
-// ── campaigns ────────────────────────────────────────────
-const STAGE_LABEL = Object.fromEntries(STAGES);
+// ── dashboard ────────────────────────────────────────────
+async function loadDashboard() {
+  if (!contacts.length) await loadContacts();
+  const counts = Object.fromEntries(STAGES.map(([v]) => [v, contacts.filter((c) => c.pipeline_stage === v).length]));
+  const cards = document.getElementById('stat-cards');
+  cards.innerHTML = `<div class="stat-card"><div class="n">${contacts.length}</div><div class="label">Total prospects</div></div>` +
+    STAGES.map(([v, l]) => `<div class="stat-card"><div class="n">${counts[v]}</div><div class="label">${l}</div></div>`).join('');
 
-async function loadCampaigns() {
+  const [appts, activity] = await Promise.all([api('/api/appointments'), api('/api/activity')]);
+  const apptsEl = document.getElementById('dash-appointments');
+  apptsEl.innerHTML = appts.length ? appts.slice(0, 8).map((a) =>
+    `<div class="list-row"><span>${escapeHtml(a.title)} — ${escapeHtml(a.business || '')}</span><span class="dim">${new Date(a.starts_at).toLocaleDateString()}</span></div>`
+  ).join('') : '<div class="empty">Nothing scheduled.</div>';
+
+  const actEl = document.getElementById('dash-activity');
+  actEl.innerHTML = activity.length ? activity.map((ev) =>
+    `<div class="list-row"><span>${escapeHtml(ev.business || '')} — ${ev.type === 'stage_change' ? `stage → ${escapeHtml(ev.body)}` : escapeHtml(ev.type)}</span><span class="dim">${new Date(ev.at).toLocaleDateString()}</span></div>`
+  ).join('') : '<div class="empty">No activity yet.</div>';
+}
+
+// ── campaigns ────────────────────────────────────────────
+async function loadCampaignsView() {
   const campaigns = await api('/api/campaigns');
   const list = document.getElementById('campaigns-list');
   list.innerHTML = '';
-  if (!campaigns.length) list.innerHTML = '<p class="meta">No campaigns yet.</p>';
+  if (!campaigns.length) { list.innerHTML = '<p class="empty">No campaigns yet.</p>'; return; }
   for (const c of campaigns) {
     const card = document.createElement('div');
-    card.className = 'campaign-card';
+    card.className = 'card campaign-card';
     const enrolled = Object.entries(c.enrollments || {}).map(([k, v]) => `${v} ${k}`).join(', ') || 'none enrolled';
     card.innerHTML = `
       <div class="row1">
@@ -266,19 +312,13 @@ function addStepRow(container) {
   container.appendChild(row);
 }
 
-const newCampaignBackdrop = document.getElementById('new-campaign-modal-backdrop');
-document.getElementById('new-campaign-btn').addEventListener('click', () => {
-  const container = document.getElementById('steps-container');
-  container.innerHTML = '';
-  addStepRow(container);
-  newCampaignBackdrop.classList.remove('hidden');
-});
-document.getElementById('new-campaign-cancel').addEventListener('click', () => newCampaignBackdrop.classList.add('hidden'));
-document.getElementById('add-step-btn').addEventListener('click', () => addStepRow(document.getElementById('steps-container')));
+const stepsContainer = document.getElementById('steps-container');
+addStepRow(stepsContainer);
+document.getElementById('add-step-btn').addEventListener('click', () => addStepRow(stepsContainer));
 document.getElementById('new-campaign-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
-  const steps = [...document.querySelectorAll('#steps-container .step-row')].map((row) => ({
+  const steps = [...stepsContainer.querySelectorAll('.step-row')].map((row) => ({
     channel: row.querySelector('.s-channel').value,
     wait_days: Number(row.querySelector('.s-wait').value || 0),
     subject_tmpl: row.querySelector('.s-subject').value || null,
@@ -286,27 +326,59 @@ document.getElementById('new-campaign-form').addEventListener('submit', async (e
   }));
   await api('/api/campaigns', { method: 'POST', body: JSON.stringify({ name: fd.get('name'), trigger_stage: fd.get('trigger_stage') || null, steps }) });
   e.target.reset();
-  newCampaignBackdrop.classList.add('hidden');
-  loadCampaigns();
+  stepsContainer.innerHTML = '';
+  addStepRow(stepsContainer);
+  loadCampaignsView();
 });
 
-// ── calendar ─────────────────────────────────────────────
-async function loadAppointments() {
-  const appts = await api('/api/appointments');
-  const list = document.getElementById('appointments-list');
-  list.innerHTML = '';
-  if (!appts.length) list.innerHTML = '<p class="meta">No appointments scheduled.</p>';
-  for (const a of appts) {
-    const row = document.createElement('div');
-    row.className = 'appt-row';
-    row.innerHTML = `<div><strong>${escapeHtml(a.title)}</strong> — ${escapeHtml(a.business || a.contact_name || '')}</div>
-      <div class="when">${new Date(a.starts_at).toLocaleString()}</div>`;
-    row.addEventListener('click', () => {
-      document.querySelector('#tabs .tab[data-view="pipeline"]').click();
-      openDrawer(a.contact_id);
-    });
-    list.appendChild(row);
+// ── settings ─────────────────────────────────────────────
+async function loadSettingsView() {
+  const s = await api('/api/settings');
+  const form = document.getElementById('settings-form');
+  form.send_window_start.value = s.send_window_start;
+  form.send_window_end.value = s.send_window_end;
+  form.send_days.value = s.send_days.join(',');
+  form.daily_send_limit.value = s.daily_send_limit;
+  loadSuppression();
+}
+
+document.getElementById('settings-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  await api('/api/settings', {
+    method: 'PUT',
+    body: JSON.stringify({
+      send_window_start: fd.get('send_window_start'),
+      send_window_end: fd.get('send_window_end'),
+      send_days: fd.get('send_days').split(',').map((n) => Number(n.trim())).filter(Boolean),
+      daily_send_limit: Number(fd.get('daily_send_limit')),
+    }),
+  });
+});
+
+async function loadSuppression() {
+  const rows = await api('/api/suppression');
+  document.getElementById('suppression-count').textContent = `Suppression list (${rows.length})`;
+  const tbody = document.getElementById('suppression-tbody');
+  tbody.innerHTML = '';
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(r.email)}</td><td>${escapeHtml(r.reason)}</td><td>${new Date(r.created_at).toLocaleString()}</td><td></td>`;
+    const btn = document.createElement('button');
+    btn.className = 'btn-secondary';
+    btn.textContent = 'Remove';
+    btn.addEventListener('click', async () => { await api(`/api/suppression/${encodeURIComponent(r.email)}`, { method: 'DELETE' }); loadSuppression(); });
+    tr.lastElementChild.appendChild(btn);
+    tbody.appendChild(tr);
   }
 }
 
-loadContacts();
+document.getElementById('suppress-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  await api('/api/suppression', { method: 'POST', body: JSON.stringify({ email: fd.get('email'), reason: fd.get('reason') }) });
+  e.target.reset();
+  loadSuppression();
+});
+
+loadDashboard();

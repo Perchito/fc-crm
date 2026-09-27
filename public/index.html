@@ -7,71 +7,138 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<header>
-  <h1>fc-crm</h1>
-  <nav id="tabs">
-    <button data-view="pipeline" class="tab active">Pipeline</button>
-    <button data-view="campaigns" class="tab">Campaigns</button>
-    <button data-view="calendar" class="tab">Calendar</button>
-  </nav>
-  <button id="new-contact-btn">+ Contact</button>
-</header>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo"><span>FC Cleaning</span> <b>CRM</b><div class="tagline">Self-hosted CRM ops</div></div>
+    <nav id="tabs">
+      <button data-view="dashboard" class="tab active">
+        <svg viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5M6 10v9h5v-5h2v5h5v-9"/></svg>
+        Dashboard
+      </button>
+      <button data-view="prospects" class="tab">
+        <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="8" r="2.5"/><path d="M15.5 14.2c2.5.4 4.5 2.6 4.5 5.8"/></svg>
+        Prospects
+      </button>
+      <button data-view="pipeline" class="tab">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="10" rx="1"/><rect x="17" y="4" width="5" height="13" rx="1"/></svg>
+        Pipeline
+      </button>
+      <button data-view="campaigns" class="tab">
+        <svg viewBox="0 0 24 24"><path d="M3 11 20 4l-4 17-5-7-7-3Z"/></svg>
+        Campaigns
+      </button>
+      <button data-view="settings" class="tab">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>
+        Settings
+      </button>
+    </nav>
+  </aside>
 
-<main>
-  <section id="view-pipeline"><div id="board"></div></section>
-  <section id="view-campaigns" class="hidden">
-    <div class="view-header"><button id="new-campaign-btn" class="btn-primary">+ Campaign</button></div>
-    <div id="campaigns-list"></div>
-  </section>
-  <section id="view-calendar" class="hidden">
-    <div id="appointments-list"></div>
-  </section>
-</main>
+  <main>
+    <section id="view-dashboard" class="view">
+      <div class="page-head"><h1>Dashboard</h1><p>Pipeline at a glance.</p></div>
+      <div id="stat-cards" class="stat-cards"></div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Upcoming appointments</h3>
+          <div id="dash-appointments"></div>
+        </div>
+        <div class="card">
+          <h3>Recent activity</h3>
+          <div id="dash-activity"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-prospects" class="view hidden">
+      <div class="page-head"><h1>Prospects</h1><p id="prospects-count">Search or filter by pipeline stage.</p></div>
+      <div class="toolbar">
+        <input id="prospects-search" placeholder="Search name or email..." />
+        <select id="prospects-filter">
+          <option value="">All statuses</option>
+        </select>
+      </div>
+      <div class="card">
+        <h3>Add a prospect manually</h3>
+        <form id="new-contact-form" class="inline-form">
+          <input name="business" placeholder="Business" required />
+          <input name="contact_name" placeholder="Contact name" />
+          <input name="email" type="email" placeholder="Email" />
+          <input name="phone" placeholder="Phone" />
+          <input name="source" placeholder="Source" />
+          <button type="submit" class="btn-primary">+ Add</button>
+        </form>
+      </div>
+      <div class="card table-card">
+        <table>
+          <thead><tr><th>Business</th><th>Email</th><th>Phone</th><th>Source</th><th>Status</th></tr></thead>
+          <tbody id="prospects-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-pipeline" class="view hidden">
+      <div class="page-head"><h1>Pipeline</h1><p>Drag a card to change its stage.</p></div>
+      <div id="board"></div>
+    </section>
+
+    <section id="view-campaigns" class="view hidden">
+      <div class="page-head"><h1>Campaigns</h1><p>Sequences the automation engine sends. Merge fields: {{business}}, {{first_name}}, {{email}}, {{phone}}.</p></div>
+      <div class="card">
+        <h3>New campaign</h3>
+        <form id="new-campaign-form">
+          <input name="name" placeholder="Campaign name" required />
+          <label class="field-label">Auto-enrol contacts when stage becomes:
+            <select name="trigger_stage">
+              <option value="">— manual only —</option>
+              <option value="new">New</option>
+              <option value="contacted">Contacted</option>
+              <option value="quoted">Quoted</option>
+              <option value="won">Won</option>
+              <option value="lost">Lost</option>
+            </select>
+          </label>
+          <div id="steps-container"></div>
+          <button type="button" id="add-step-btn" class="btn-secondary">+ Step</button>
+          <div class="modal-actions"><button type="submit" class="btn-primary">Create campaign</button></div>
+        </form>
+      </div>
+      <div id="campaigns-list"></div>
+    </section>
+
+    <section id="view-settings" class="view hidden">
+      <div class="page-head"><h1>Settings</h1><p>Automation behaviour and the suppression list.</p></div>
+      <div class="card">
+        <h3>Automation</h3>
+        <form id="settings-form" class="settings-grid">
+          <label>Send window start (HH:MM)<input name="send_window_start" /></label>
+          <label>Send window end (HH:MM)<input name="send_window_end" /></label>
+          <label>Send days (1=Mon..7=Sun, comma-separated)<input name="send_days" /></label>
+          <label>Daily send limit (all campaigns)<input name="daily_send_limit" type="number" min="1" /></label>
+          <button type="submit" class="btn-primary">Save settings</button>
+        </form>
+      </div>
+      <div class="card">
+        <h3>Add to suppression list</h3>
+        <form id="suppress-form" class="inline-form">
+          <input name="email" type="email" placeholder="Enter email address..." required />
+          <input name="reason" placeholder="Reason (optional)" />
+          <button type="submit" class="btn-danger">Suppress</button>
+        </form>
+      </div>
+      <div class="card table-card">
+        <h3 id="suppression-count">Suppression list</h3>
+        <table>
+          <thead><tr><th>Email</th><th>Reason</th><th>Added</th><th></th></tr></thead>
+          <tbody id="suppression-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
 
 <div id="drawer-backdrop" class="hidden"></div>
 <aside id="drawer" class="hidden"></aside>
-
-<div id="new-modal-backdrop" class="hidden">
-  <div class="modal">
-    <h2>New contact</h2>
-    <form id="new-contact-form">
-      <input name="business" placeholder="Business" required />
-      <input name="contact_name" placeholder="Contact name" />
-      <input name="email" type="email" placeholder="Email" />
-      <input name="phone" placeholder="Phone" />
-      <input name="source" placeholder="Source (e.g. referral, ai-discover)" />
-      <div class="modal-actions">
-        <button type="button" id="new-modal-cancel" class="btn-secondary">Cancel</button>
-        <button type="submit" class="btn-primary">Create</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<div id="new-campaign-modal-backdrop" class="hidden">
-  <div class="modal modal-wide">
-    <h2>New campaign</h2>
-    <form id="new-campaign-form">
-      <input name="name" placeholder="Campaign name" required />
-      <label class="field-label">Auto-enrol contacts when stage becomes:
-        <select name="trigger_stage">
-          <option value="">— manual only —</option>
-          <option value="new">New</option>
-          <option value="contacted">Contacted</option>
-          <option value="quoted">Quoted</option>
-          <option value="won">Won</option>
-          <option value="lost">Lost</option>
-        </select>
-      </label>
-      <div id="steps-container"></div>
-      <button type="button" id="add-step-btn" class="btn-secondary">+ Step</button>
-      <div class="modal-actions">
-        <button type="button" id="new-campaign-cancel" class="btn-secondary">Cancel</button>
-        <button type="submit" class="btn-primary">Create</button>
-      </div>
-    </form>
-  </div>
-</div>
 
 <script src="app.js"></script>
 </body>

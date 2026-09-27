@@ -109,3 +109,10 @@ create table if not exists appointments (
   created_at timestamptz not null default now()
 );
 create index if not exists appointments_starts_idx on appointments (starts_at);
+
+-- ─────────────────────────────── suppression ───────────────────────────────
+create table if not exists suppression (
+  email      text primary key,
+  reason     text not null default '',
+  created_at timestamptz not null default now()
+);
