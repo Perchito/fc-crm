@@ -62,9 +62,18 @@ function renderCard(c) {
   card.className = 'card kanban-card';
   card.draggable = true;
   card.innerHTML = `<div class="biz">${escapeHtml(c.business || '(no name)')}</div>
-    <div class="meta">${escapeHtml(c.contact_name || c.email || c.phone || '')}</div>`;
+    <div class="meta">${escapeHtml(c.contact_name || c.email || c.phone || '')}</div>
+    <select class="card-stage">${STAGES.map(([v, l]) => `<option value="${v}" ${v === c.pipeline_stage ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   card.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', c.id));
   card.addEventListener('click', () => openDrawer(c.id));
+  const stageSelect = card.querySelector('.card-stage');
+  stageSelect.addEventListener('click', (e) => e.stopPropagation());
+  stageSelect.addEventListener('change', async (e) => {
+    const stage = e.target.value;
+    c.pipeline_stage = stage;
+    renderBoard();
+    await api(`/api/contacts/${c.id}`, { method: 'PATCH', body: JSON.stringify({ pipeline_stage: stage }) });
+  });
   return card;
 }
 
