@@ -13,12 +13,36 @@ app.use(express.json());
 
 // HTTP Basic auth (same pattern as fc-outreach /ops) — skipped entirely if no
 // CRM_PASS is set, so local dev works without fuss.
+//
+// Brute-force guard (this is public via Tailscale Funnel, where every request
+// arrives from the local proxy, so no per-IP limits apply): a login header
+// that already passed is let through at once; any other one is checked at
+// most once per second across all clients, so guessing is capped at ~1
+// try/s without ever locking the owner out. Ported verbatim from
+// fc-outreach's homeserver/app-server.mjs (commit 272316c).
 if (CRM_PASS) {
+  const CHECK_EVERY_MS = 1000;
+  const knownGood = new Set();
+  let nextCheckAt = 0;
+
   app.use((req, res, next) => {
     const hdr = req.headers.authorization || '';
+    if (hdr.startsWith('Basic ') && knownGood.has(hdr)) return next();
+    const now = Date.now();
+    if (now < nextCheckAt) {
+      res.set('Retry-After', '1').set('Cache-Control', 'no-store');
+      return res.status(429).send('Too many login attempts — wait a second and try again.');
+    }
+    nextCheckAt = now + CHECK_EVERY_MS;
     const [user, pass] = Buffer.from(hdr.replace('Basic ', ''), 'base64').toString().split(':');
-    if (user === CRM_USER && pass === CRM_PASS) return next();
-    res.set('WWW-Authenticate', 'Basic realm="fc-crm"').status(401).send('Auth required');
+    if (user === CRM_USER && pass === CRM_PASS) {
+      if (knownGood.size > 50) knownGood.clear();
+      knownGood.add(hdr);
+      return next();
+    }
+    const from = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+    console.warn(`[auth] wrong login from ${from}`);
+    res.set('WWW-Authenticate', 'Basic realm="fc-crm"').set('Cache-Control', 'no-store').status(401).send('Auth required');
   });
 }
 
