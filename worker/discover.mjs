@@ -53,7 +53,9 @@ function extractJson(text) {
 
 async function main() {
   const { stdout } = await run('claude', ['-p', prompt, '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch'], {
-    timeout: 5 * 60_000,
+    // discovery + drafting per lead takes longer than discovery alone
+    // (measured: 77-126s discovery-only vs >300s once drafting was added)
+    timeout: 10 * 60_000,
     maxBuffer: 8 * 1024 * 1024,
   });
   let result = stdout;
