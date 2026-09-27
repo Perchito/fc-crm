@@ -40,11 +40,11 @@
       <div id="stat-cards" class="stat-cards"></div>
       <div class="grid-2">
         <div class="card">
-          <h3>Upcoming appointments</h3>
+          <h2>Upcoming appointments</h2>
           <div id="dash-appointments"></div>
         </div>
         <div class="card">
-          <h3>Recent activity</h3>
+          <h2>Recent activity</h2>
           <div id="dash-activity"></div>
         </div>
       </div>
@@ -59,7 +59,7 @@
         </select>
       </div>
       <div class="card">
-        <h3>Add a prospect manually</h3>
+        <h2>Add a prospect manually</h2>
         <form id="new-contact-form" class="inline-form">
           <input name="business" placeholder="Business" required />
           <input name="contact_name" placeholder="Contact name" />
@@ -85,7 +85,7 @@
     <section id="view-campaigns" class="view hidden">
       <div class="page-head"><h1>Campaigns</h1><p>Sequences the automation engine sends. Merge fields: {{business}}, {{first_name}}, {{email}}, {{phone}}.</p></div>
       <div class="card">
-        <h3>New campaign</h3>
+        <h2>New campaign</h2>
         <form id="new-campaign-form">
           <input name="name" placeholder="Campaign name" required />
           <label class="field-label">Auto-enrol contacts when stage becomes:
@@ -109,7 +109,7 @@
     <section id="view-settings" class="view hidden">
       <div class="page-head"><h1>Settings</h1><p>Automation behaviour and the suppression list.</p></div>
       <div class="card">
-        <h3>Automation</h3>
+        <h2>Automation</h2>
         <form id="settings-form" class="settings-grid">
           <label>Send window start (HH:MM)<input name="send_window_start" /></label>
           <label>Send window end (HH:MM)<input name="send_window_end" /></label>
@@ -119,7 +119,7 @@
         </form>
       </div>
       <div class="card">
-        <h3>Add to suppression list</h3>
+        <h2>Add to suppression list</h2>
         <form id="suppress-form" class="inline-form">
           <input name="email" type="email" placeholder="Enter email address..." required />
           <input name="reason" placeholder="Reason (optional)" />
@@ -127,7 +127,7 @@
         </form>
       </div>
       <div class="card table-card">
-        <h3 id="suppression-count">Suppression list</h3>
+        <h2 id="suppression-count">Suppression list</h2>
         <table>
           <thead><tr><th>Email</th><th>Reason</th><th>Added</th><th></th></tr></thead>
           <tbody id="suppression-tbody"></tbody>
