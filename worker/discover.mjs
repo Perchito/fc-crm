@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// fc-crm — AI lead discovery. Runs on this same machine, so no HTTP job queue
-// is needed (unlike fc-outreach's remote worker): shell out to headless
-// Claude Code directly and write straight to Postgres.
+// fc-crm — AI lead discovery + drafting. Runs on this same machine, so no
+// HTTP job queue is needed (unlike fc-outreach's remote worker): shell out to
+// headless Claude Code directly and write straight to Postgres.
 //
-// Discovery-only prompt (drafting is a fixed template, not AI — see
-// lib/leadTemplate.mjs) so this stays fast and doesn't risk timing out.
+// Two claude -p passes: one discovery call for the whole batch, then one
+// researched drafting call per new lead (lib/aiDraft.mjs — Luis's writer
+// brief, needs its own web search per business so can't be folded into the
+// discovery call). Falls back to the fixed template (lib/leadTemplate.mjs)
+// if a lead's drafting call fails, so one bad draft never blocks the batch —
+// same "queue is never blocked" principle as fc-outreach's queue.js.
 //
 // Hospitality-only, independent/family-owned only (Luis: they decide on a
 // cleaning contractor themselves — a chain's head office doesn't).
@@ -16,8 +20,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import pg from 'pg';
-import { withSignature } from '../lib/signature.mjs';
+import { ensureSignature } from '../lib/signature.mjs';
 import { subjectFor, bodyFor } from '../lib/leadTemplate.mjs';
+import { draftEmailAI } from '../lib/aiDraft.mjs';
 
 const run = promisify(execFile);
 const { DATABASE_URL } = process.env;
@@ -60,7 +65,7 @@ async function main() {
   if (!leads.length) { console.log('discover: no leads returned'); return; }
 
   const pool = new pg.Pool({ connectionString: DATABASE_URL });
-  let inserted = 0, drafted = 0;
+  let inserted = 0, drafted = 0, aiDrafted = 0;
   for (const l of leads) {
     if (!l.email) continue;
     const { rows: [sup] } = await pool.query(`select 1 from suppression where lower(email) = lower($1)`, [l.email]);
@@ -76,14 +81,23 @@ async function main() {
     if (!contact) continue;
     inserted++;
 
+    let body;
+    try {
+      body = ensureSignature(await draftEmailAI(l));
+      aiDrafted++;
+    } catch (err) {
+      console.error(`draft failed for ${contact.business}, using template:`, err.message || err);
+      body = ensureSignature(bodyFor(contact));
+    }
+
     await pool.query(
       `insert into sends (contact_id, channel, subject, body, status) values ($1,'email',$2,$3,'draft')`,
-      [contact.id, subjectFor(contact), withSignature(bodyFor(contact))]
+      [contact.id, subjectFor(contact), body]
     );
     await pool.query(`insert into events (contact_id, type, body) values ($1,'draft',$2)`, [contact.id, subjectFor(contact)]);
     drafted++;
   }
-  console.log(`discover: ${inserted}/${leads.length} new contacts added, ${drafted} drafted`);
+  console.log(`discover: ${inserted}/${leads.length} new contacts added, ${drafted} drafted (${aiDrafted} AI-researched)`);
   await pool.end();
 }
 
