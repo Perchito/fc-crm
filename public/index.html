@@ -9,11 +9,23 @@
 <body>
 <header>
   <h1>fc-crm</h1>
+  <nav id="tabs">
+    <button data-view="pipeline" class="tab active">Pipeline</button>
+    <button data-view="campaigns" class="tab">Campaigns</button>
+    <button data-view="calendar" class="tab">Calendar</button>
+  </nav>
   <button id="new-contact-btn">+ Contact</button>
 </header>
 
 <main>
-  <div id="board"></div>
+  <section id="view-pipeline"><div id="board"></div></section>
+  <section id="view-campaigns" class="hidden">
+    <div class="view-header"><button id="new-campaign-btn" class="btn-primary">+ Campaign</button></div>
+    <div id="campaigns-list"></div>
+  </section>
+  <section id="view-calendar" class="hidden">
+    <div id="appointments-list"></div>
+  </section>
 </main>
 
 <div id="drawer-backdrop" class="hidden"></div>
@@ -30,6 +42,31 @@
       <input name="source" placeholder="Source (e.g. referral, ai-discover)" />
       <div class="modal-actions">
         <button type="button" id="new-modal-cancel" class="btn-secondary">Cancel</button>
+        <button type="submit" class="btn-primary">Create</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="new-campaign-modal-backdrop" class="hidden">
+  <div class="modal modal-wide">
+    <h2>New campaign</h2>
+    <form id="new-campaign-form">
+      <input name="name" placeholder="Campaign name" required />
+      <label class="field-label">Auto-enrol contacts when stage becomes:
+        <select name="trigger_stage">
+          <option value="">— manual only —</option>
+          <option value="new">New</option>
+          <option value="contacted">Contacted</option>
+          <option value="quoted">Quoted</option>
+          <option value="won">Won</option>
+          <option value="lost">Lost</option>
+        </select>
+      </label>
+      <div id="steps-container"></div>
+      <button type="button" id="add-step-btn" class="btn-secondary">+ Step</button>
+      <div class="modal-actions">
+        <button type="button" id="new-campaign-cancel" class="btn-secondary">Cancel</button>
         <button type="submit" class="btn-primary">Create</button>
       </div>
     </form>

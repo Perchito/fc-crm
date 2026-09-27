@@ -2,6 +2,9 @@
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f1f5f9; color: #1e293b; }
 header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }
 header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+#tabs { display: flex; gap: 4px; }
+.tab { background: none; border: none; padding: 6px 12px; border-radius: 6px; font-size: 14px; color: #64748b; }
+.tab.active { background: #eef2ff; color: #4338ca; font-weight: 600; }
 button { cursor: pointer; font: inherit; }
 .btn-primary { background: #4f46e5; color: #fff; border: none; padding: 6px 14px; border-radius: 6px; font-size: 14px; }
 .btn-primary:hover { background: #4338ca; }
@@ -30,8 +33,27 @@ main { padding: 24px; overflow-x: auto; }
 .task { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; }
 .task.done label { text-decoration: line-through; color: #94a3b8; }
 
-#new-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 30; display: flex; align-items: center; justify-content: center; }
+#new-modal-backdrop, #new-campaign-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 30; display: flex; align-items: center; justify-content: center; overflow-y: auto; padding: 24px 0; }
 .modal { background: #fff; border-radius: 8px; padding: 24px; width: 100%; max-width: 380px; }
+.modal.modal-wide { max-width: 520px; }
 .modal h2 { margin-top: 0; font-size: 16px; }
-.modal input { display: block; width: 100%; margin-bottom: 10px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 5px; font: inherit; font-size: 14px; }
+.modal input, .modal select, .modal textarea { display: block; width: 100%; margin-bottom: 10px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 5px; font: inherit; font-size: 14px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.field-label { display: block; font-size: 12px; color: #64748b; margin-bottom: 10px; }
+
+.view-header { margin-bottom: 16px; }
+.step-row { border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+.step-row .step-row-top { display: flex; gap: 8px; margin-bottom: 6px; }
+.step-row .step-row-top select { width: auto; margin-bottom: 0; }
+.step-row .step-row-top input[type=number] { width: 90px; margin-bottom: 0; }
+.step-row .remove-step { background: none; border: none; color: #ef4444; font-size: 13px; margin-left: auto; }
+
+.campaign-card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 12px; max-width: 640px; }
+.campaign-card .row1 { display: flex; justify-content: space-between; align-items: center; }
+.campaign-card h3 { margin: 0; font-size: 15px; }
+.campaign-card .meta { font-size: 12px; color: #64748b; margin-top: 4px; }
+.campaign-card .steps-summary { font-size: 13px; color: #475569; margin-top: 10px; }
+.campaign-card select.status-select { width: auto; display: inline-block; padding: 4px 8px; font-size: 13px; }
+
+.appt-row { background: #fff; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; max-width: 640px; display: flex; justify-content: space-between; align-items: center; }
+.appt-row .when { font-size: 12px; color: #64748b; }

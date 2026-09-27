@@ -68,9 +68,10 @@ async function openDrawer(id) {
   const drawer = document.getElementById('drawer');
   const backdrop = document.getElementById('drawer-backdrop');
   const c = contacts.find((x) => x.id === id);
-  const [events, tasks] = await Promise.all([
+  const [events, tasks, appts] = await Promise.all([
     api(`/api/contacts/${id}/events`),
     api(`/api/contacts/${id}/tasks`),
+    api(`/api/contacts/${id}/appointments`),
   ]);
 
   drawer.innerHTML = `
@@ -99,6 +100,16 @@ async function openDrawer(id) {
     </div>
 
     <div class="section">
+      <strong style="font-size:13px">Appointments</strong>
+      <div id="appts-list"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="appt-title" placeholder="Title" />
+        <input id="appt-when" type="datetime-local" />
+      </div>
+      <button class="btn-secondary" id="appt-btn" style="margin-top:6px">Add appointment</button>
+    </div>
+
+    <div class="section">
       <strong style="font-size:13px">Timeline</strong>
       <div id="events-list"></div>
     </div>
@@ -113,6 +124,15 @@ async function openDrawer(id) {
       await api(`/api/tasks/${t.id}`, { method: 'PATCH', body: JSON.stringify({ done: e.target.checked }) });
     });
     tasksList.appendChild(row);
+  }
+
+  const apptsList = drawer.querySelector('#appts-list');
+  if (!appts.length) apptsList.innerHTML = '<div class="meta">None scheduled.</div>';
+  for (const a of appts) {
+    const row = document.createElement('div');
+    row.className = 'event';
+    row.innerHTML = `<div>${escapeHtml(a.title)}</div><div class="when">${new Date(a.starts_at).toLocaleString()}</div>`;
+    apptsList.appendChild(row);
   }
 
   const eventsList = drawer.querySelector('#events-list');
@@ -155,6 +175,13 @@ async function openDrawer(id) {
     await api(`/api/contacts/${id}/tasks`, { method: 'POST', body: JSON.stringify({ title: e.target.value.trim() }) });
     openDrawer(id);
   });
+  drawer.querySelector('#appt-btn').addEventListener('click', async () => {
+    const title = drawer.querySelector('#appt-title').value.trim();
+    const when = drawer.querySelector('#appt-when').value;
+    if (!title || !when) return;
+    await api(`/api/contacts/${id}/appointments`, { method: 'POST', body: JSON.stringify({ title, starts_at: new Date(when).toISOString() }) });
+    openDrawer(id);
+  });
 
   drawer.classList.remove('hidden');
   backdrop.classList.remove('hidden');
@@ -179,5 +206,107 @@ document.getElementById('new-contact-form').addEventListener('submit', async (e)
   newBackdrop.classList.add('hidden');
   loadContacts();
 });
+
+// ── tabs ─────────────────────────────────────────────────
+for (const btn of document.querySelectorAll('#tabs .tab')) {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#tabs .tab').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    for (const el of document.querySelectorAll('main > section')) el.classList.add('hidden');
+    const view = document.getElementById(`view-${btn.dataset.view}`);
+    view.classList.remove('hidden');
+    if (btn.dataset.view === 'campaigns') loadCampaigns();
+    if (btn.dataset.view === 'calendar') loadAppointments();
+  });
+}
+
+// ── campaigns ────────────────────────────────────────────
+const STAGE_LABEL = Object.fromEntries(STAGES);
+
+async function loadCampaigns() {
+  const campaigns = await api('/api/campaigns');
+  const list = document.getElementById('campaigns-list');
+  list.innerHTML = '';
+  if (!campaigns.length) list.innerHTML = '<p class="meta">No campaigns yet.</p>';
+  for (const c of campaigns) {
+    const card = document.createElement('div');
+    card.className = 'campaign-card';
+    const enrolled = Object.entries(c.enrollments || {}).map(([k, v]) => `${v} ${k}`).join(', ') || 'none enrolled';
+    card.innerHTML = `
+      <div class="row1">
+        <h3>${escapeHtml(c.name)}</h3>
+        <select class="status-select">
+          <option value="active" ${c.status === 'active' ? 'selected' : ''}>Active</option>
+          <option value="paused" ${c.status === 'paused' ? 'selected' : ''}>Paused</option>
+        </select>
+      </div>
+      <div class="meta">${c.trigger_stage ? `Auto-enrols on stage → ${escapeHtml(STAGE_LABEL[c.trigger_stage] || c.trigger_stage)}` : 'Manual enrol only'} · cap ${c.daily_cap}/day · ${enrolled}</div>
+      <div class="steps-summary">${c.steps.map((s) => `${s.step_index + 1}. [${escapeHtml(s.channel)}] +${Number(s.wait_days)}d`).join(' → ') || 'no steps'}</div>
+    `;
+    card.querySelector('.status-select').addEventListener('change', async (e) => {
+      await api(`/api/campaigns/${c.id}`, { method: 'PATCH', body: JSON.stringify({ status: e.target.value }) });
+    });
+    list.appendChild(card);
+  }
+}
+
+function addStepRow(container) {
+  const row = document.createElement('div');
+  row.className = 'step-row';
+  row.innerHTML = `
+    <div class="step-row-top">
+      <select class="s-channel"><option value="email">Email</option><option value="sms">SMS</option></select>
+      <input type="number" class="s-wait" min="0" value="0" title="days after previous step" />
+      <button type="button" class="remove-step">Remove</button>
+    </div>
+    <input class="s-subject" placeholder="Subject (email only)" />
+    <textarea class="s-body" rows="2" placeholder="Body — {{business}}, {{first_name}}, {{email}}, {{phone}}"></textarea>
+  `;
+  row.querySelector('.remove-step').addEventListener('click', () => row.remove());
+  container.appendChild(row);
+}
+
+const newCampaignBackdrop = document.getElementById('new-campaign-modal-backdrop');
+document.getElementById('new-campaign-btn').addEventListener('click', () => {
+  const container = document.getElementById('steps-container');
+  container.innerHTML = '';
+  addStepRow(container);
+  newCampaignBackdrop.classList.remove('hidden');
+});
+document.getElementById('new-campaign-cancel').addEventListener('click', () => newCampaignBackdrop.classList.add('hidden'));
+document.getElementById('add-step-btn').addEventListener('click', () => addStepRow(document.getElementById('steps-container')));
+document.getElementById('new-campaign-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const steps = [...document.querySelectorAll('#steps-container .step-row')].map((row) => ({
+    channel: row.querySelector('.s-channel').value,
+    wait_days: Number(row.querySelector('.s-wait').value || 0),
+    subject_tmpl: row.querySelector('.s-subject').value || null,
+    body_tmpl: row.querySelector('.s-body').value,
+  }));
+  await api('/api/campaigns', { method: 'POST', body: JSON.stringify({ name: fd.get('name'), trigger_stage: fd.get('trigger_stage') || null, steps }) });
+  e.target.reset();
+  newCampaignBackdrop.classList.add('hidden');
+  loadCampaigns();
+});
+
+// ── calendar ─────────────────────────────────────────────
+async function loadAppointments() {
+  const appts = await api('/api/appointments');
+  const list = document.getElementById('appointments-list');
+  list.innerHTML = '';
+  if (!appts.length) list.innerHTML = '<p class="meta">No appointments scheduled.</p>';
+  for (const a of appts) {
+    const row = document.createElement('div');
+    row.className = 'appt-row';
+    row.innerHTML = `<div><strong>${escapeHtml(a.title)}</strong> — ${escapeHtml(a.business || a.contact_name || '')}</div>
+      <div class="when">${new Date(a.starts_at).toLocaleString()}</div>`;
+    row.addEventListener('click', () => {
+      document.querySelector('#tabs .tab[data-view="pipeline"]').click();
+      openDrawer(a.contact_id);
+    });
+    list.appendChild(row);
+  }
+}
 
 loadContacts();
