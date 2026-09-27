@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>fc-crm</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <h1>fc-crm</h1>
+  <button id="new-contact-btn">+ Contact</button>
+</header>
+
+<main>
+  <div id="board"></div>
+</main>
+
+<div id="drawer-backdrop" class="hidden"></div>
+<aside id="drawer" class="hidden"></aside>
+
+<div id="new-modal-backdrop" class="hidden">
+  <div class="modal">
+    <h2>New contact</h2>
+    <form id="new-contact-form">
+      <input name="business" placeholder="Business" required />
+      <input name="contact_name" placeholder="Contact name" />
+      <input name="email" type="email" placeholder="Email" />
+      <input name="phone" placeholder="Phone" />
+      <input name="source" placeholder="Source (e.g. referral, ai-discover)" />
+      <div class="modal-actions">
+        <button type="button" id="new-modal-cancel" class="btn-secondary">Cancel</button>
+        <button type="submit" class="btn-primary">Create</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
