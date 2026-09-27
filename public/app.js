@@ -109,10 +109,11 @@ async function openDrawer(id) {
   const drawer = document.getElementById('drawer');
   const backdrop = document.getElementById('drawer-backdrop');
   const c = contacts.find((x) => x.id === id);
-  const [events, tasks, appts] = await Promise.all([
+  const [events, tasks, appts, drafts] = await Promise.all([
     api(`/api/contacts/${id}/events`),
     api(`/api/contacts/${id}/tasks`),
     api(`/api/contacts/${id}/appointments`),
+    api(`/api/contacts/${id}/drafts`),
   ]);
 
   drawer.innerHTML = `
@@ -127,6 +128,8 @@ async function openDrawer(id) {
     <div class="field"><label>Source</label><input id="f-source" value="${escapeHtml(c.source || '')}" /></div>
     <div style="margin-top:10px;display:flex;gap:8px"><button class="btn-primary" id="save-btn">Save</button>
       <button class="btn-secondary" id="delete-btn">Delete</button></div>
+
+    <div id="drafts-section"></div>
 
     <div class="section">
       <label style="font-size:12px;color:var(--text-dim)">Add note</label>
@@ -155,6 +158,37 @@ async function openDrawer(id) {
       <div id="events-list"></div>
     </div>
   `;
+
+  const draftsSection = drawer.querySelector('#drafts-section');
+  for (const d of drafts) {
+    const box = document.createElement('div');
+    box.className = 'section draft-box';
+    box.innerHTML = `
+      <strong style="font-size:13px">AI-drafted email</strong>
+      <input class="d-subject" value="${escapeHtml(d.subject || '')}" style="margin-top:8px" />
+      <textarea class="d-body" rows="8">${escapeHtml(d.body || '')}</textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn-primary d-send">Send</button>
+        <button class="btn-secondary d-discard">Discard</button>
+      </div>
+    `;
+    box.querySelector('.d-subject').addEventListener('change', (e) => api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ subject: e.target.value }) }));
+    box.querySelector('.d-body').addEventListener('change', (e) => api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ body: e.target.value }) }));
+    box.querySelector('.d-send').addEventListener('click', async () => {
+      const subject = box.querySelector('.d-subject').value;
+      const body = box.querySelector('.d-body').value;
+      await api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ subject, body }) });
+      await api(`/api/sends/${d.id}/send`, { method: 'POST' });
+      loadContacts();
+      openDrawer(id);
+    });
+    box.querySelector('.d-discard').addEventListener('click', async () => {
+      if (!confirm('Discard this draft?')) return;
+      await api(`/api/sends/${d.id}/discard`, { method: 'POST' });
+      openDrawer(id);
+    });
+    draftsSection.appendChild(box);
+  }
 
   const tasksList = drawer.querySelector('#tasks-list');
   if (!tasks.length) tasksList.innerHTML = '<div class="empty">No tasks.</div>';
@@ -256,7 +290,21 @@ async function loadDashboard() {
   cards.innerHTML = `<div class="stat-card"><div class="n">${contacts.length}</div><div class="label">Total prospects</div></div>` +
     STAGES.map(([v, l]) => `<div class="stat-card"><div class="n">${counts[v]}</div><div class="label">${l}</div></div>`).join('');
 
-  const [appts, activity] = await Promise.all([api('/api/appointments'), api('/api/activity')]);
+  const [appts, activity, drafts] = await Promise.all([api('/api/appointments'), api('/api/activity'), api('/api/drafts')]);
+
+  document.getElementById('drafts-count').textContent = `Drafts awaiting review (${drafts.length})`;
+  const draftsTbody = document.getElementById('drafts-tbody');
+  draftsTbody.innerHTML = drafts.length ? '' : '<tr><td colspan="3" class="empty">Nothing waiting — new AI-discovered leads get drafted automatically.</td></tr>';
+  for (const d of drafts) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(d.business || '')}</td><td>${escapeHtml(d.subject || '')}</td><td></td>`;
+    tr.addEventListener('click', () => {
+      document.querySelector('#tabs .tab[data-view="prospects"]').click();
+      openDrawer(d.contact_id);
+    });
+    draftsTbody.appendChild(tr);
+  }
+
   const apptsEl = document.getElementById('dash-appointments');
   apptsEl.innerHTML = appts.length ? appts.slice(0, 8).map((a) =>
     `<div class="list-row"><span>${escapeHtml(a.title)} — ${escapeHtml(a.business || '')}</span><span class="dim">${new Date(a.starts_at).toLocaleDateString()}</span></div>`

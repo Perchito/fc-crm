@@ -1,7 +1,7 @@
 import express from 'express';
 import pg from 'pg';
 import { runDueSteps, enroll, getSettings, saveSettings } from './lib/engine.mjs';
-import { emailConfigured } from './lib/mailer.mjs';
+import { emailConfigured, sendEmail } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
 
 const { DATABASE_URL, CRM_USER = 'fc', CRM_PASS, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
@@ -213,6 +213,59 @@ app.patch('/api/appointments/:id', async (req, res) => {
     [req.params.id, ...updates.map((k) => req.body[k])]
   );
   res.json(rows[0]);
+});
+
+// ── AI-drafted emails (awaiting review before send) ────
+app.get('/api/drafts', async (req, res) => {
+  const { rows } = await pool.query(
+    `select s.*, c.business, c.contact_name from sends s
+     join contacts c on c.id = s.contact_id
+     where s.status = 'draft' order by s.sent_at desc`
+  );
+  res.json(rows);
+});
+
+app.get('/api/contacts/:id/drafts', async (req, res) => {
+  const { rows } = await pool.query(`select * from sends where contact_id = $1 and status = 'draft' order by sent_at desc`, [req.params.id]);
+  res.json(rows);
+});
+
+app.patch('/api/sends/:id', async (req, res) => {
+  const fields = ['subject', 'body'];
+  const updates = Object.keys(req.body).filter((k) => fields.includes(k));
+  if (!updates.length) return res.status(400).json({ error: 'no valid fields' });
+  const set = updates.map((k, i) => `${k} = $${i + 2}`).join(', ');
+  const { rows } = await pool.query(
+    `update sends set ${set} where id = $1 and status = 'draft' returning *`,
+    [req.params.id, ...updates.map((k) => req.body[k])]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'not found or already sent' });
+  res.json(rows[0]);
+});
+
+app.post('/api/sends/:id/send', async (req, res) => {
+  const { rows: [draft] } = await pool.query(
+    `select s.*, c.email, c.pipeline_stage from sends s join contacts c on c.id = s.contact_id where s.id = $1 and s.status = 'draft'`,
+    [req.params.id]
+  );
+  if (!draft) return res.status(404).json({ error: 'not found or already sent' });
+  try {
+    await sendEmail({ to: draft.email, subject: draft.subject, text: draft.body });
+    await pool.query(`update sends set status = 'sent', sent_at = now() where id = $1`, [draft.id]);
+    await pool.query(`insert into events (contact_id, type, body) values ($1,'email',$2)`, [draft.contact_id, draft.subject]);
+    if (draft.pipeline_stage === 'new') {
+      await pool.query(`update contacts set pipeline_stage = 'contacted', updated_at = now() where id = $1`, [draft.contact_id]);
+      await pool.query(`insert into events (contact_id, type, body) values ($1,'stage_change','contacted')`, [draft.contact_id]);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+app.post('/api/sends/:id/discard', async (req, res) => {
+  await pool.query(`update sends set status = 'discarded' where id = $1 and status = 'draft'`, [req.params.id]);
+  res.status(204).end();
 });
 
 app.get('/api/activity', async (req, res) => {
