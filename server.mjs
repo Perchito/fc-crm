@@ -1,6 +1,8 @@
 import express from 'express';
 import pg from 'pg';
 import { runDueSteps, enroll } from './lib/engine.mjs';
+import { emailConfigured } from './lib/mailer.mjs';
+import { smsConfigured } from './lib/sms.mjs';
 
 const { DATABASE_URL, CRM_USER = 'fc', CRM_PASS, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -21,6 +23,9 @@ if (CRM_PASS) {
 }
 
 const STAGES = ['new', 'contacted', 'quoted', 'won', 'lost'];
+
+// booleans only — never echoes the actual credentials
+app.get('/api/health', (req, res) => res.json({ email: emailConfigured(), sms: smsConfigured() }));
 
 // ── contacts ────────────────────────────────────────────
 app.get('/api/contacts', async (req, res) => {
