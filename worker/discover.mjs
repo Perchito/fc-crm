@@ -6,8 +6,10 @@
 // Discovery-only prompt (drafting is a fixed template, not AI — see
 // lib/leadTemplate.mjs) so this stays fast and doesn't risk timing out.
 //
-//   DISCOVER_QUERY="cleaning leads for offices in Bolton, Greater Manchester" \
-//   DISCOVER_COUNT=8 node worker/discover.mjs
+// Hospitality-only, independent/family-owned only (Luis: they decide on a
+// cleaning contractor themselves — a chain's head office doesn't).
+//
+//   DISCOVER_AREA="Bolton, Greater Manchester" DISCOVER_COUNT=8 node worker/discover.mjs
 //
 // Requires: `claude` CLI installed and logged in (`claude login`) as this user.
 
@@ -21,13 +23,24 @@ const run = promisify(execFile);
 const { DATABASE_URL } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
 
-const QUERY = process.env.DISCOVER_QUERY || 'small businesses (offices, restaurants, gyms) near Bolton, Greater Manchester who might need a commercial cleaning contractor';
+const AREA = process.env.DISCOVER_AREA || process.env.DISCOVER_QUERY || 'Bolton, Greater Manchester';
 const COUNT = Number(process.env.DISCOVER_COUNT || 8);
 
-const prompt = `Find ${COUNT} UK businesses matching: ${QUERY}.
-For each, search the web and only include ones where you find a real published
-contact email (a mailto: link or an address shown on a Contact/About page) —
-never invent one. Return ONLY a JSON array (no prose), each item:
+const prompt = `Find ${COUNT} independent, family-owned or owner-operated bars, restaurants and
+cafés in or near ${AREA}, UK.
+
+ONLY include a venue that is genuinely independent — a single site, or at most 2-3 sites run by
+the same named owner(s). EXCLUDE: national or regional chains, franchises, pub companies /
+breweries that own the pub (a free house is fine), hotel groups, restaurant groups of 4+ sites,
+and anything run by a larger parent company or head office. A family who owns and runs the place
+themselves is exactly who we want — they decide on a cleaning contractor themselves, not a head
+office. When in doubt, check the venue's own site or Companies House for how many sites / who
+owns it, and leave it out if it looks corporate.
+
+For each kept venue, search the web and only include ones where you find a real published
+contact email (a mailto: link or an address shown on a Contact/About page) — never invent one.
+
+Return ONLY a JSON array (no prose), each item:
 {"business":"","email":"","contactName":null,"phone":"","address":"","website":""}`;
 
 function extractJson(text) {
