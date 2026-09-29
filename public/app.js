@@ -113,6 +113,66 @@ document.getElementById('new-contact-form').addEventListener('submit', async (e)
   loadContacts();
 });
 
+// ── draft editor (drawer + Drafts page) ─────────────────
+function draftBox(d, after) {
+  const box = document.createElement('div');
+  box.className = 'section draft-box';
+  box.innerHTML = `
+    <strong style="font-size:13px">${d.step_index > 0 ? 'Follow-up email' : 'AI-drafted email'}</strong>
+    <input class="d-subject" value="${escapeHtml(d.subject || '')}" style="margin-top:8px" />
+    <textarea class="d-body" rows="8">${escapeHtml(d.body || '')}</textarea>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn-primary d-send">Send</button>
+      <button class="btn-secondary d-discard">Discard</button>
+    </div>
+  `;
+  box.querySelector('.d-subject').addEventListener('change', (e) => api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ subject: e.target.value }) }));
+  box.querySelector('.d-body').addEventListener('change', (e) => api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ body: e.target.value }) }));
+  box.querySelector('.d-send').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    const subject = box.querySelector('.d-subject').value;
+    const body = box.querySelector('.d-body').value;
+    try {
+      await api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ subject, body }) });
+      await api(`/api/sends/${d.id}/send`, { method: 'POST' });
+    } catch (err) { alert(`Send failed: ${err.message}`); e.target.disabled = false; return; }
+    after();
+  });
+  box.querySelector('.d-discard').addEventListener('click', async () => {
+    if (!confirm('Discard this draft?')) return;
+    await api(`/api/sends/${d.id}/discard`, { method: 'POST' });
+    after();
+  });
+  return box;
+}
+
+// ── drafts page ─────────────────────────────────────────
+async function loadDraftsView() {
+  const drafts = await api('/api/drafts');
+  document.getElementById('drafts-page-count').textContent =
+    `${drafts.length} waiting. Nothing is sent until you press Send.`;
+  const list = document.getElementById('drafts-list');
+  list.innerHTML = drafts.length ? '' : '<p class="empty">Nothing waiting — new leads and due follow-ups get drafted here automatically.</p>';
+  for (const d of drafts) {
+    const card = document.createElement('div');
+    card.className = 'card draft-card';
+    const site = /^https?:\/\//i.test(d.website || '') ? `<a href="${escapeHtml(d.website)}" target="_blank" rel="noopener">${escapeHtml(d.website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''))}</a>` : '';
+    card.innerHTML = `
+      <div class="row1"><h3><a href="#" class="open-lead">${escapeHtml(d.business || '(no name)')}</a></h3>
+        <span class="dim">${escapeHtml(d.campaign_name || '')}</span></div>
+      <div class="meta">${[escapeHtml(d.email || ''), site, escapeHtml(d.address || '')].filter(Boolean).join(' · ')}</div>
+      ${d.notes ? `<p class="about">${escapeHtml(d.notes).replace(/\n+/g, '<br>')}</p>` : ''}
+    `;
+    card.querySelector('.open-lead').addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (!contacts.length) await loadContacts();
+      openDrawer(d.contact_id);
+    });
+    card.appendChild(draftBox(d, loadDraftsView));
+    list.appendChild(card);
+  }
+}
+
 // ── drawer ──────────────────────────────────────────────
 async function openDrawer(id) {
   const drawer = document.getElementById('drawer');
@@ -123,7 +183,7 @@ async function openDrawer(id) {
     api(`/api/contacts/${id}/tasks`),
     api(`/api/contacts/${id}/appointments`),
     api(`/api/contacts/${id}/drafts`),
-    api(`/api/contacts/${id}/enrollments`),
+    api(`/api/contacts/${id}/enrollments`).catch(() => []),
   ]);
   const enrollmentLine = (e) => {
     const state = e.status === 'active'
@@ -180,35 +240,7 @@ async function openDrawer(id) {
   `;
 
   const draftsSection = drawer.querySelector('#drafts-section');
-  for (const d of drafts) {
-    const box = document.createElement('div');
-    box.className = 'section draft-box';
-    box.innerHTML = `
-      <strong style="font-size:13px">AI-drafted email</strong>
-      <input class="d-subject" value="${escapeHtml(d.subject || '')}" style="margin-top:8px" />
-      <textarea class="d-body" rows="8">${escapeHtml(d.body || '')}</textarea>
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn-primary d-send">Send</button>
-        <button class="btn-secondary d-discard">Discard</button>
-      </div>
-    `;
-    box.querySelector('.d-subject').addEventListener('change', (e) => api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ subject: e.target.value }) }));
-    box.querySelector('.d-body').addEventListener('change', (e) => api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ body: e.target.value }) }));
-    box.querySelector('.d-send').addEventListener('click', async () => {
-      const subject = box.querySelector('.d-subject').value;
-      const body = box.querySelector('.d-body').value;
-      await api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ subject, body }) });
-      await api(`/api/sends/${d.id}/send`, { method: 'POST' });
-      loadContacts();
-      openDrawer(id);
-    });
-    box.querySelector('.d-discard').addEventListener('click', async () => {
-      if (!confirm('Discard this draft?')) return;
-      await api(`/api/sends/${d.id}/discard`, { method: 'POST' });
-      openDrawer(id);
-    });
-    draftsSection.appendChild(box);
-  }
+  for (const d of drafts) draftsSection.appendChild(draftBox(d, () => { loadContacts(); openDrawer(id); }));
 
   const tasksList = drawer.querySelector('#tasks-list');
   if (!tasks.length) tasksList.innerHTML = '<div class="empty">No tasks.</div>';
@@ -293,7 +325,7 @@ function closeDrawer() {
 document.getElementById('drawer-backdrop').addEventListener('click', closeDrawer);
 
 // ── tabs ─────────────────────────────────────────────────
-const loaders = { dashboard: loadDashboard, campaigns: loadCampaignsView, settings: loadSettingsView };
+const loaders = { dashboard: loadDashboard, drafts: loadDraftsView, campaigns: loadCampaignsView, settings: loadSettingsView };
 for (const btn of document.querySelectorAll('#tabs .tab')) {
   btn.addEventListener('click', () => {
     document.querySelectorAll('#tabs .tab').forEach((b) => b.classList.remove('active'));
@@ -334,10 +366,7 @@ async function loadDashboard() {
   for (const d of drafts) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${escapeHtml(d.business || '')}</td><td>${escapeHtml(d.subject || '')}</td><td></td>`;
-    tr.addEventListener('click', () => {
-      document.querySelector('#tabs .tab[data-view="prospects"]').click();
-      openDrawer(d.contact_id);
-    });
+    tr.addEventListener('click', () => document.querySelector('#tabs .tab[data-view="drafts"]').click());
     draftsTbody.appendChild(tr);
   }
 

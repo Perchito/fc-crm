@@ -20,6 +20,10 @@
         <svg viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5M6 10v9h5v-5h2v5h5v-9"/></svg>
         Dashboard
       </button>
+      <button data-view="drafts" class="tab">
+        <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="m4 6 8 7 8-7"/></svg>
+        Drafts
+      </button>
       <button data-view="prospects" class="tab">
         <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="8" r="2.5"/><path d="M15.5 14.2c2.5.4 4.5 2.6 4.5 5.8"/></svg>
         Prospects
@@ -60,6 +64,11 @@
           <div id="dash-activity"></div>
         </div>
       </div>
+    </section>
+
+    <section id="view-drafts" class="view hidden">
+      <div class="page-head"><h1>Drafts</h1><p id="drafts-page-count"></p></div>
+      <div id="drafts-list"></div>
     </section>
 
     <section id="view-prospects" class="view hidden">

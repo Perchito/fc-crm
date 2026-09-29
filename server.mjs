@@ -251,8 +251,9 @@ app.patch('/api/appointments/:id', async (req, res) => {
 // ── AI-drafted emails (awaiting review before send) ────
 app.get('/api/drafts', async (req, res) => {
   const { rows } = await pool.query(
-    `select s.*, c.business, c.contact_name from sends s
+    `select s.*, c.business, c.contact_name, c.email, c.website, c.address, c.notes, cp.name as campaign_name from sends s
      join contacts c on c.id = s.contact_id
+     left join campaigns cp on cp.id = s.campaign_id
      where s.status = 'draft' order by s.sent_at desc`
   );
   res.json(rows);
