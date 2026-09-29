@@ -118,16 +118,25 @@ async function openDrawer(id) {
   const drawer = document.getElementById('drawer');
   const backdrop = document.getElementById('drawer-backdrop');
   const c = contacts.find((x) => x.id === id);
-  const [events, tasks, appts, drafts] = await Promise.all([
+  const [events, tasks, appts, drafts, enrollments] = await Promise.all([
     api(`/api/contacts/${id}/events`),
     api(`/api/contacts/${id}/tasks`),
     api(`/api/contacts/${id}/appointments`),
     api(`/api/contacts/${id}/drafts`),
+    api(`/api/contacts/${id}/enrollments`),
   ]);
+  const enrollmentLine = (e) => {
+    const state = e.status === 'active'
+      ? (e.next_due_at ? `follow-up due ${new Date(e.next_due_at).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}` : 'first email awaiting review')
+      : e.status === 'completed' ? 'sequence finished' : `stopped (${(e.stopped_reason || '').replace('_', ' ')})`;
+    return `<div class="list-row"><span>${escapeHtml(e.campaign_name)}</span><span class="dim">${escapeHtml(state)}</span></div>`;
+  };
 
   drawer.innerHTML = `
     <button class="close-btn" id="drawer-close">✕</button>
     <h2>${escapeHtml(c.business || '(no name)')}</h2>
+    <div class="field"><label>About the business</label><textarea id="f-notes" rows="5" placeholder="What the place is, owner, size, busy times...">${escapeHtml(c.notes || '')}</textarea></div>
+    ${enrollments.length ? `<div class="field"><label>Campaign</label>${enrollments.map(enrollmentLine).join('')}</div>` : ''}
     <div class="field"><label>Stage</label>
       <select id="f-stage">${STAGES.map(([v, l]) => `<option value="${v}" ${v === c.pipeline_stage ? 'selected' : ''}>${l}</option>`).join('')}</select>
     </div>
@@ -241,6 +250,7 @@ async function openDrawer(id) {
       phone: drawer.querySelector('#f-phone').value,
       website: drawer.querySelector('#f-website').value,
       address: drawer.querySelector('#f-address').value,
+      notes: drawer.querySelector('#f-notes').value,
       source: drawer.querySelector('#f-source').value,
     };
     await api(`/api/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -361,7 +371,7 @@ async function loadCampaignsView() {
         </select>
       </div>
       <div class="meta">${c.trigger_stage ? `Auto-enrols on stage → ${escapeHtml(STAGE_LABEL[c.trigger_stage] || c.trigger_stage)}` : 'Manual enrol only'} · cap ${c.daily_cap}/day · ${enrolled}</div>
-      <div class="steps-summary">${c.steps.map((s) => `${s.step_index + 1}. [${escapeHtml(s.channel)}] +${Number(s.wait_days)}d`).join(' → ') || 'no steps'}</div>
+      <div class="steps-summary">${c.steps.length && c.steps[0].step_index === 1 ? '1. [AI draft, reviewed by hand] → ' : ''}${c.steps.map((s) => `${s.step_index + 1}. [${escapeHtml(s.channel)}] +${Number(s.wait_days)}d`).join(' → ') || 'no steps'}</div>
     `;
     card.querySelector('.status-select').addEventListener('change', async (e) => {
       await api(`/api/campaigns/${c.id}`, { method: 'PATCH', body: JSON.stringify({ status: e.target.value }) });

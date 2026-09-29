@@ -115,6 +115,15 @@ app.post('/api/contacts/:id/notes', async (req, res) => {
   res.status(201).json(rows[0]);
 });
 
+app.get('/api/contacts/:id/enrollments', async (req, res) => {
+  const { rows } = await pool.query(
+    `select e.*, c.name as campaign_name from enrollments e join campaigns c on c.id = e.campaign_id
+     where e.contact_id = $1 order by e.enrolled_at desc`,
+    [req.params.id]
+  );
+  res.json(rows);
+});
+
 app.get('/api/contacts/:id/tasks', async (req, res) => {
   const { rows } = await pool.query('select * from tasks where contact_id = $1 order by done, due_at nulls last', [req.params.id]);
   res.json(rows);

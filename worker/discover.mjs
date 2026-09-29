@@ -20,6 +20,8 @@
 // Each day's leads go into their own campaign ("Rochdale — 30 Sep"): enrolled
 // with next_due_at = null, so the engine never auto-sends; the AI draft is
 // step 0 and still needs reviewing/sending by hand from the Dashboard.
+// Step 1 is FOLLOW_UP: sending the draft schedules it 5 days later, and the
+// engine then sends it automatically (unless the stage has moved on).
 //
 //   DISCOVER_AREA="Bolton" DISCOVER_TARGET=20 node worker/discover.mjs
 //
@@ -29,8 +31,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import pg from 'pg';
-import { ensureSignature } from '../lib/signature.mjs';
-import { subjectFor, bodyFor } from '../lib/leadTemplate.mjs';
+import { ensureSignature, withSignature } from '../lib/signature.mjs';
+import { subjectFor, bodyFor, FOLLOW_UP } from '../lib/leadTemplate.mjs';
 import { draftEmailAI } from '../lib/aiDraft.mjs';
 
 const run = promisify(execFile);
@@ -63,8 +65,13 @@ ${skip.length ? `\nWe already have these — do NOT return any of them:\n${skip.
 For each kept venue, search the web and only include ones where you find a real published
 contact email (a mailto: link or an address shown on a Contact/About page) — never invent one.
 
+"type" is a few words (e.g. "Italian restaurant", "Real-ale pub", "Independent café"). "about" is
+2-4 short factual sentences a cleaning company would want before calling: what the place is, who
+owns/runs it if published, rough size (covers/rooms/floors), opening hours or busiest times, and
+anything like events, a function room or a big kitchen. Only facts you actually found.
+
 Return ONLY a JSON array (no prose), each item:
-{"business":"","email":"","contactName":null,"phone":"","address":"","website":""}`;
+{"business":"","type":"","about":"","email":"","contactName":null,"phone":"","address":"","website":""}`;
 
 function extractJson(text) {
   const m = String(text || '').match(/\[[\s\S]*\]/);
@@ -87,6 +94,10 @@ async function campaignFor(pool) {
   const { rows: [existing] } = await pool.query(`select id from campaigns where name = $1`, [name]);
   if (existing) return existing.id;
   const { rows: [c] } = await pool.query(`insert into campaigns (name) values ($1) returning id`, [name]);
+  await pool.query(
+    `insert into campaign_steps (campaign_id, step_index, channel, wait_days, subject_tmpl, body_tmpl) values ($1,1,'email',$2,$3,$4)`,
+    [c.id, FOLLOW_UP.wait_days, FOLLOW_UP.subject_tmpl, withSignature(FOLLOW_UP.body_tmpl)]
+  );
   return c.id;
 }
 
@@ -117,10 +128,11 @@ async function main() {
       if (sup) continue;
 
       const { rows } = await pool.query(
-        `insert into contacts (business, contact_name, email, phone, address, website, source)
-         values ($1,$2,$3,$4,$5,$6,'ai-discover')
+        `insert into contacts (business, contact_name, email, phone, address, website, notes, source)
+         values ($1,$2,$3,$4,$5,$6,$7,'ai-discover')
          on conflict do nothing returning id, business`,
-        [l.business || null, l.contactName || null, l.email, l.phone || null, l.address || null, l.website || null]
+        [l.business || null, l.contactName || null, l.email, l.phone || null, l.address || null, l.website || null,
+         [l.type, l.about].filter(Boolean).join('\n\n')]
       );
       const contact = rows[0];
       if (!contact) continue;
