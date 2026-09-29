@@ -1,6 +1,6 @@
 import express from 'express';
 import pg from 'pg';
-import { runDueSteps, enroll, getSettings, saveSettings } from './lib/engine.mjs';
+import { runDueSteps, enroll, advance, getSettings, saveSettings } from './lib/engine.mjs';
 import { emailConfigured, sendEmail } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
 
@@ -276,6 +276,11 @@ app.post('/api/sends/:id/send', async (req, res) => {
   try {
     await sendEmail({ to: draft.email, subject: draft.subject, text: draft.body });
     await pool.query(`update sends set status = 'sent', sent_at = now() where id = $1`, [draft.id]);
+    // AI-discovery campaigns: the draft is step 0, so move the enrollment on (completes it unless follow-up steps exist)
+    if (draft.enrollment_id) {
+      const { rows: [enr] } = await pool.query(`select * from enrollments where id = $1`, [draft.enrollment_id]);
+      if (enr) await advance(pool, enr);
+    }
     await pool.query(`insert into events (contact_id, type, body) values ($1,'email',$2)`, [draft.contact_id, draft.subject]);
     if (draft.pipeline_stage === 'new') {
       await pool.query(`update contacts set pipeline_stage = 'contacted', updated_at = now() where id = $1`, [draft.contact_id]);
@@ -288,7 +293,8 @@ app.post('/api/sends/:id/send', async (req, res) => {
 });
 
 app.post('/api/sends/:id/discard', async (req, res) => {
-  await pool.query(`update sends set status = 'discarded' where id = $1 and status = 'draft'`, [req.params.id]);
+  const { rows: [d] } = await pool.query(`update sends set status = 'discarded' where id = $1 and status = 'draft' returning enrollment_id`, [req.params.id]);
+  if (d?.enrollment_id) await pool.query(`update enrollments set status = 'stopped', stopped_reason = 'discarded', updated_at = now() where id = $1`, [d.enrollment_id]);
   res.status(204).end();
 });
 
