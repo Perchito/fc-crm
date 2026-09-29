@@ -10,8 +10,10 @@
 // if a lead's drafting call fails, so one bad draft never blocks the batch —
 // same "queue is never blocked" principle as fc-outreach's queue.js.
 //
-// Hospitality-only, independent/family-owned only (Luis: they decide on a
-// cleaning contractor themselves — a chain's head office doesn't).
+// Independent/owner-run only (Luis: they decide on a cleaning contractor
+// themselves — a chain's head office doesn't). Hospitality + small offices.
+// Covers all of Greater Manchester by rotating one borough per day, so a
+// fixed area doesn't keep returning venues we already have.
 //
 //   DISCOVER_AREA="Bolton, Greater Manchester" DISCOVER_COUNT=8 node worker/discover.mjs
 //
@@ -28,21 +30,26 @@ const run = promisify(execFile);
 const { DATABASE_URL } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
 
-const AREA = process.env.DISCOVER_AREA || process.env.DISCOVER_QUERY || 'Bolton, Greater Manchester';
+const BOROUGHS = ['Manchester', 'Salford', 'Trafford', 'Stockport', 'Tameside', 'Oldham', 'Rochdale', 'Bury', 'Bolton', 'Wigan'];
+const day = Math.floor(Date.now() / 86_400_000);
+const AREA = process.env.DISCOVER_AREA || `${BOROUGHS[day % BOROUGHS.length]}, Greater Manchester`;
 const COUNT = Number(process.env.DISCOVER_COUNT || 8);
 
-const prompt = `Find ${COUNT} independent, family-owned or owner-operated bars, restaurants and
-cafés in or near ${AREA}, UK.
+const prompt = `Find ${COUNT} independent, owner-run businesses in or near ${AREA}, UK — roughly half
+hospitality (bars, restaurants, cafés) and half offices (e.g. accountants, solicitors, estate and
+letting agents, recruitment agencies, architects, marketing/IT firms, other small companies with
+their own office premises).
 
-ONLY include a venue that is genuinely independent — a single site, or at most 2-3 sites run by
-the same named owner(s). EXCLUDE: national or regional chains, franchises, pub companies /
+ONLY include a business that is genuinely independent — a single site, or at most 2-3 sites run by
+the same named owner(s)/partners. EXCLUDE: national or regional chains, franchises, pub companies /
 breweries that own the pub (a free house is fine), hotel groups, restaurant groups of 4+ sites,
-and anything run by a larger parent company or head office. A family who owns and runs the place
-themselves is exactly who we want — they decide on a cleaning contractor themselves, not a head
-office. When in doubt, check the venue's own site or Companies House for how many sites / who
-owns it, and leave it out if it looks corporate.
+branches of national firms, serviced/co-working offices, and anything run by a larger parent
+company or head office. An owner or family who runs the place themselves is exactly who we want —
+they decide on a cleaning contractor themselves, not a head office. When in doubt, check the
+business's own site or Companies House for how many sites / who owns it, and leave it out if it
+looks corporate.
 
-For each kept venue, search the web and only include ones where you find a real published
+For each kept business, search the web and only include ones where you find a real published
 contact email (a mailto: link or an address shown on a Contact/About page) — never invent one.
 
 Return ONLY a JSON array (no prose), each item:
@@ -56,7 +63,7 @@ function extractJson(text) {
 
 async function main() {
   const { stdout } = await run('claude', ['-p', prompt, '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch'], {
-    timeout: 5 * 60_000,
+    timeout: 10 * 60_000,
     maxBuffer: 8 * 1024 * 1024,
   });
   let result = stdout;
