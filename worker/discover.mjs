@@ -20,7 +20,8 @@
 // Each day's leads go into their own campaign ("Rochdale — 30 Sep"): enrolled
 // with next_due_at = null, so the engine never auto-sends; the AI draft is
 // step 0 and still needs reviewing/sending by hand from the Dashboard.
-// Step 1 is FOLLOW_UP: sending the draft schedules it 5 days later, and the
+// Manually added leads are AI-drafted first, into a standing "Manual leads"
+// campaign. Step 1 is FOLLOW_UP: sending the draft schedules it 5 days later, and the
 // engine then sends it automatically (unless the stage has moved on).
 //
 //   DISCOVER_AREA="Bolton" DISCOVER_TARGET=20 node worker/discover.mjs
@@ -89,8 +90,7 @@ async function findLeads(skip) {
   return extractJson(result) || [];
 }
 
-async function campaignFor(pool) {
-  const name = `${BOROUGH} — ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+async function campaignNamed(pool, name) {
   const { rows: [existing] } = await pool.query(`select id from campaigns where name = $1`, [name]);
   if (existing) return existing.id;
   const { rows: [c] } = await pool.query(`insert into campaigns (name) values ($1) returning id`, [name]);
@@ -101,9 +101,68 @@ async function campaignFor(pool) {
   return c.id;
 }
 
+// Draft step 0 for a contact and enrol it (next_due_at null = waits for Luis to send it).
+async function addDraft(pool, campaignId, contact, body) {
+  const { rows: [enr] } = await pool.query(
+    `insert into enrollments (campaign_id, contact_id, next_due_at) values ($1,$2,null) returning id`,
+    [campaignId, contact.id]
+  );
+  await pool.query(
+    `insert into sends (enrollment_id, contact_id, campaign_id, step_index, channel, subject, body, status)
+     values ($1,$2,$3,0,'email',$4,$5,'draft')`,
+    [enr.id, contact.id, campaignId, subjectFor(contact), body]
+  );
+  await pool.query(`insert into events (contact_id, type, body) values ($1,'draft',$2)`, [contact.id, subjectFor(contact)]);
+}
+
+async function profileFor(c) {
+  const { stdout } = await run('claude', ['-p', `Look up this UK hospitality business on its website and the web:
+${c.business}${c.website ? ` — ${c.website}` : ''}${c.address ? ` — ${c.address}` : ''}
+
+Return ONLY JSON {"type":"","about":""}. "type" is a few words (e.g. "Italian restaurant").
+"about" is 2-4 short factual sentences a cleaning company would want before calling: what the place
+is, who owns/runs it if published, rough size, opening hours or busiest times, and anything like
+events, a function room or a big kitchen. Only facts you actually found.`,
+    '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch'], { timeout: 8 * 60_000, maxBuffer: 4 << 20 });
+  let text = stdout;
+  try { text = JSON.parse(stdout).result ?? stdout; } catch { /* raw text */ }
+  const o = JSON.parse(String(text).match(/\{[\s\S]*\}/)[0]);
+  return [o.type, o.about].filter(Boolean).join('\n\n');
+}
+
+// Leads Luis added by hand (anything not from ai-discover) that have never
+// been emailed or enrolled: research + AI-draft them into the "Manual leads"
+// campaign, same review-before-send flow as discovered leads.
+async function draftManualLeads(pool) {
+  const { rows } = await pool.query(`
+    select c.* from contacts c
+    where c.source is distinct from 'ai-discover' and c.email is not null and c.pipeline_stage = 'new'
+      and not exists (select 1 from sends s where s.contact_id = c.id)
+      and not exists (select 1 from enrollments e where e.contact_id = c.id)
+      and not exists (select 1 from suppression x where lower(x.email) = lower(c.email))`);
+  if (!rows.length) return;
+  const campaignId = await campaignNamed(pool, 'Manual leads');
+  for (const c of rows) {
+    if (!c.notes) {
+      try { await pool.query(`update contacts set notes = $2 where id = $1`, [c.id, await profileFor(c)]); }
+      catch (err) { console.error(`profile failed for ${c.business}:`, err.message || err); }
+    }
+    let body;
+    try { body = ensureSignature(await draftEmailAI(c)); }
+    catch (err) {
+      console.error(`draft failed for ${c.business}, using template:`, err.message || err);
+      body = ensureSignature(bodyFor(c));
+    }
+    await addDraft(pool, campaignId, c, body);
+  }
+  console.log(`manual leads: ${rows.length} drafted`);
+}
+
 async function main() {
   const pool = new pg.Pool({ connectionString: DATABASE_URL });
-  const campaignId = await campaignFor(pool);
+  await draftManualLeads(pool);
+  const campaignId = await campaignNamed(pool,
+    `${BOROUGH} — ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`);
   let inserted = 0, aiDrafted = 0, empty = 0;
 
   while (inserted < TARGET && empty < MAX_EMPTY && new Date() < deadline) {
@@ -147,16 +206,7 @@ async function main() {
         body = ensureSignature(bodyFor(contact));
       }
 
-      const { rows: [enr] } = await pool.query(
-        `insert into enrollments (campaign_id, contact_id, next_due_at) values ($1,$2,null) returning id`,
-        [campaignId, contact.id]
-      );
-      await pool.query(
-        `insert into sends (enrollment_id, contact_id, campaign_id, step_index, channel, subject, body, status)
-         values ($1,$2,$3,0,'email',$4,$5,'draft')`,
-        [enr.id, contact.id, campaignId, subjectFor(contact), body]
-      );
-      await pool.query(`insert into events (contact_id, type, body) values ($1,'draft',$2)`, [contact.id, subjectFor(contact)]);
+      await addDraft(pool, campaignId, contact, body);
     }
     empty = newThisBatch ? 0 : empty + 1;
     console.log(`discover ${BOROUGH}: batch +${newThisBatch} (${inserted}/${TARGET} so far)`);
