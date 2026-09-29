@@ -93,7 +93,7 @@ function renderProspects() {
   for (const c of rows) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${escapeHtml(c.business || '(no name)')}</td><td>${escapeHtml(c.email || '')}</td>
-      <td>${escapeHtml(c.phone || '')}</td><td>${escapeHtml(c.source || '')}</td><td>${pill(c.pipeline_stage)}</td>`;
+      <td>${escapeHtml(c.phone || '')}</td><td>${/^https?:\/\//i.test(c.website || '') ? `<a href="${escapeHtml(c.website)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(c.website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''))}</a>` : ''}</td><td>${escapeHtml(c.address || '')}</td><td>${escapeHtml(c.source || '')}</td><td>${pill(c.pipeline_stage)}</td>`;
     tr.addEventListener('click', () => openDrawer(c.id));
     tbody.appendChild(tr);
   }
@@ -134,6 +134,8 @@ async function openDrawer(id) {
     <div class="field"><label>Contact name</label><input id="f-contact_name" value="${escapeHtml(c.contact_name || '')}" /></div>
     <div class="field"><label>Email</label><input id="f-email" value="${escapeHtml(c.email || '')}" /></div>
     <div class="field"><label>Phone</label><input id="f-phone" value="${escapeHtml(c.phone || '')}" /></div>
+    <div class="field"><label>Website ${/^https?:\/\//i.test(c.website || '') ? `<a href="${escapeHtml(c.website)}" target="_blank" rel="noopener">open ↗</a>` : ''}</label><input id="f-website" value="${escapeHtml(c.website || '')}" /></div>
+    <div class="field"><label>Address ${c.address ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}" target="_blank" rel="noopener">map ↗</a>` : ''}</label><input id="f-address" value="${escapeHtml(c.address || '')}" /></div>
     <div class="field"><label>Source</label><input id="f-source" value="${escapeHtml(c.source || '')}" /></div>
     <div style="margin-top:10px;display:flex;gap:8px"><button class="btn-primary" id="save-btn">Save</button>
       <button class="btn-secondary" id="delete-btn">Delete</button></div>
@@ -237,6 +239,8 @@ async function openDrawer(id) {
       contact_name: drawer.querySelector('#f-contact_name').value,
       email: drawer.querySelector('#f-email').value,
       phone: drawer.querySelector('#f-phone').value,
+      website: drawer.querySelector('#f-website').value,
+      address: drawer.querySelector('#f-address').value,
       source: drawer.querySelector('#f-source').value,
     };
     await api(`/api/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
