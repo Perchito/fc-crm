@@ -35,6 +35,7 @@ import pg from 'pg';
 import { ensureSignature, withSignature } from '../lib/signature.mjs';
 import { subjectFor, bodyFor, FOLLOW_UP } from '../lib/leadTemplate.mjs';
 import { draftEmailAI } from '../lib/aiDraft.mjs';
+import { checkEmail } from '../lib/emailCheck.mjs';
 
 const run = promisify(execFile);
 const { DATABASE_URL } = process.env;
@@ -115,6 +116,19 @@ async function addDraft(pool, campaignId, contact, body) {
   await pool.query(`insert into events (contact_id, type, body) values ($1,'draft',$2)`, [contact.id, subjectFor(contact)]);
 }
 
+// Dead domain / non-existent mailbox: suppress it so it's never researched,
+// drafted or re-imported (discovery drops suppressed emails before any spend).
+async function rejectIfUndeliverable(pool, email, contactId = null) {
+  const chk = await checkEmail(email);
+  if (chk.ok) return false;
+  await pool.query(`insert into suppression (email, reason) values (lower($1), $2) on conflict do nothing`,
+    [email, `undeliverable: ${chk.reason}`]);
+  if (contactId) await pool.query(`insert into events (contact_id, type, body) values ($1,'note',$2)`,
+    [contactId, `Email not drafted — address looks undeliverable (${chk.reason})`]);
+  console.log(`skipped ${email}: ${chk.reason}`);
+  return true;
+}
+
 async function profileFor(c) {
   const { stdout } = await run('claude', ['-p', `Look up this UK hospitality business on its website and the web:
 ${c.business}${c.website ? ` — ${c.website}` : ''}${c.address ? ` — ${c.address}` : ''}
@@ -142,7 +156,9 @@ async function draftManualLeads(pool) {
       and not exists (select 1 from suppression x where lower(x.email) = lower(c.email))`);
   if (!rows.length) return;
   const campaignId = await campaignNamed(pool, 'Manual leads');
+  let drafted = 0;
   for (const c of rows) {
+    if (await rejectIfUndeliverable(pool, c.email, c.id)) continue;
     if (!c.notes) {
       try { await pool.query(`update contacts set notes = $2 where id = $1`, [c.id, await profileFor(c)]); }
       catch (err) { console.error(`profile failed for ${c.business}:`, err.message || err); }
@@ -154,8 +170,9 @@ async function draftManualLeads(pool) {
       body = ensureSignature(bodyFor(c));
     }
     await addDraft(pool, campaignId, c, body);
+    drafted++;
   }
-  console.log(`manual leads: ${rows.length} drafted`);
+  console.log(`manual leads: ${drafted}/${rows.length} drafted`);
 }
 
 async function main() {
@@ -185,6 +202,7 @@ async function main() {
       if (!l.email || inserted >= TARGET) continue;
       const { rows: [sup] } = await pool.query(`select 1 from suppression where lower(email) = lower($1)`, [l.email]);
       if (sup) continue;
+      if (await rejectIfUndeliverable(pool, l.email)) continue;
 
       const { rows } = await pool.query(
         `insert into contacts (business, contact_name, email, phone, address, website, notes, source)
