@@ -97,7 +97,7 @@
       <div class="card table-card">
         <table>
           <thead><tr><th>Business</th><th>Email</th><th>Phone</th><th>Website</th><th>Address</th><th>Source</th><th>Status</th></tr></thead>
-          <tbody id="prospects-tbody"></tbody>
+          <tbody id="prospects-tbody" class="mobile-cards"></tbody>
         </table>
       </div>
     </section>
@@ -133,7 +133,7 @@
     </section>
 
     <section id="view-calendar" class="view hidden">
-      <div class="page-head"><h1>Calendar</h1><p>Drag over the hours you're working (tap start then end on a phone) — customers can't book those. Click a shift to remove it.</p></div>
+      <div class="page-head"><h1>Calendar</h1><p>Block the hours you're working so customers can't book them: drag over them, or on a phone tap the start time and then the end time. Tap a shift to remove it.</p></div>
       <div class="cal-toolbar">
         <div class="cal-nav">
           <button class="btn-secondary" id="cal-prev" aria-label="Previous week">‹</button>
@@ -143,6 +143,8 @@
         </div>
         <button class="btn-secondary" id="cal-copy">Copy last week's shifts</button>
       </div>
+      <div class="cal-days" id="cal-days"></div>
+      <div class="cal-hint" id="cal-hint" hidden><span id="cal-hint-text"></span><button class="btn-secondary" id="cal-hint-cancel">Cancel</button></div>
       <div class="cal-wrap"><div class="cal" id="cal"></div></div>
       <div class="grid-2 cal-cards">
         <div class="card">

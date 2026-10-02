@@ -178,7 +178,11 @@ async function loadDraftsView() {
 api('/api/booking-settings').then((b) => { BOOK_URL = b.booking_url; }).catch(() => {});
 
 // ── calendar (busy blocks + booked visits) ──────────────
-const SLOT_MIN = 30, ROW_PX = 20, ROWS = 48;
+const SLOT_MIN = 30, ROWS = 48;
+// phones get a one-day view (pick the day from a strip) with taller, easier-to-tap rows
+const calMobile = matchMedia('(max-width: 700px)');
+let ROW_PX = calMobile.matches ? 30 : 20;
+let calDay = (new Date().getDay() + 6) % 7; // 0 = Monday of calWeek
 let calWeek = startOfWeek(new Date()), calAnchor = null;
 function startOfWeek(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
@@ -197,13 +201,23 @@ async function loadCalendarView(scrollTo7am = false) {
 
   const cal = document.getElementById('cal');
   const today = new Date().toDateString();
+  ROW_PX = calMobile.matches ? 30 : 20;
+  const shown = calMobile.matches ? [calDay] : [0, 1, 2, 3, 4, 5, 6];
+  cal.style.gridTemplateColumns = `52px repeat(${shown.length}, minmax(0, 1fr))`;
+  const onDay = (list, d, key = 'starts_at') => list.filter((x) => new Date(x[key]).toDateString() === addDays(from, d).toDateString());
+  document.getElementById('cal-days').innerHTML = calMobile.matches ? [0, 1, 2, 3, 4, 5, 6].map((d) => {
+    const day = addDays(from, d), nb = onDay(blocks, d).length, na = onDay(appointments, d).length;
+    return `<button class="cal-day ${d === calDay ? 'on' : ''} ${day.toDateString() === today ? 'today' : ''}" data-day="${d}">
+      <small>${day.toLocaleDateString('en-GB', { weekday: 'short' })}</small><b>${day.getDate()}</b>
+      <span class="marks">${nb ? '<i class="m-block"></i>' : ''}${na ? '<i class="m-appt"></i>' : ''}</span></button>`;
+  }).join('') : '';
   let html = '<div class="cal-corner"></div>';
-  for (let d = 0; d < 7; d++) {
+  for (const d of shown) {
     const day = addDays(from, d);
     html += `<div class="cal-dayhead ${day.toDateString() === today ? 'today' : ''}">${day.toLocaleDateString('en-GB', { weekday: 'short' })} <b>${day.getDate()}</b></div>`;
   }
   html += '<div class="cal-gutter">' + Array.from({ length: 24 }, (_, h) => `<div style="height:${ROW_PX * 2}px">${h ? `${String(h).padStart(2, '0')}:00` : ''}</div>`).join('') + '</div>';
-  for (let d = 0; d < 7; d++) html += `<div class="cal-col" data-d="${d}" style="height:${ROWS * ROW_PX}px"></div>`;
+  for (const d of shown) html += `<div class="cal-col" data-d="${d}" style="height:${ROWS * ROW_PX}px;background-size:100% ${ROW_PX * 2}px"></div>`;
   cal.innerHTML = html;
 
   const place = (startMs, endMs, d) => {
@@ -240,8 +254,21 @@ async function calCreate(col, a, b) {
   const [lo, hi] = [Math.min(a, b), Math.max(a, b)];
   await api('/api/blocks', { method: 'POST', body: JSON.stringify({ starts_at: atSlot(day, lo).toISOString(), ends_at: atSlot(day, hi + 1).toISOString(), title: "Dave's Hot Chicken" }) });
   calAnchor = null;
+  calHint(null);
   loadCalendarView();
 }
+function calHint(text) {
+  document.getElementById('cal-hint').hidden = !text;
+  if (text) document.getElementById('cal-hint-text').textContent = text;
+}
+document.getElementById('cal-hint-cancel').addEventListener('click', () => { calAnchor = null; calHint(null); document.querySelectorAll('.cal-sel').forEach((x) => x.remove()); });
+document.getElementById('cal-days').addEventListener('click', (e) => {
+  const b = e.target.closest('.cal-day');
+  if (!b) return;
+  calDay = +b.dataset.day; calAnchor = null; calHint(null);
+  loadCalendarView();
+});
+calMobile.addEventListener('change', () => { if (!document.getElementById('view-calendar').classList.contains('hidden')) loadCalendarView(true); });
 const calEl = document.getElementById('cal');
 let calDrag = null;
 calEl.addEventListener('pointerdown', (e) => {
@@ -263,6 +290,7 @@ calEl.addEventListener('click', async (e) => {
     if (calAnchor && calAnchor.col === col) return calCreate(col, calAnchor.a, i);
     document.querySelectorAll('.cal-sel').forEach((x) => x.remove());
     calAnchor = { col, a: i }; calPreview(col, i, i);
+    calHint(`Starts ${hhmm(atSlot(addDays(calWeek, +col.dataset.d), i))} — now tap the end time`);
     return;
   }
   if (!ev) return;
@@ -277,7 +305,7 @@ calEl.addEventListener('click', async (e) => {
 });
 document.getElementById('cal-prev').addEventListener('click', () => { calWeek = addDays(calWeek, -7); loadCalendarView(); });
 document.getElementById('cal-next').addEventListener('click', () => { calWeek = addDays(calWeek, 7); loadCalendarView(); });
-document.getElementById('cal-today').addEventListener('click', () => { calWeek = startOfWeek(new Date()); loadCalendarView(); });
+document.getElementById('cal-today').addEventListener('click', () => { calWeek = startOfWeek(new Date()); calDay = (new Date().getDay() + 6) % 7; loadCalendarView(true); });
 document.getElementById('cal-copy').addEventListener('click', async () => {
   const r = await api('/api/blocks/copy-week', { method: 'POST', body: JSON.stringify({ from: addDays(calWeek, -7).toISOString(), to: calWeek.toISOString() }) });
   if (!r.copied) alert('Last week has no shifts to copy.');
