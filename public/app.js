@@ -9,6 +9,7 @@ const STAGES = [
 const STAGE_LABEL = Object.fromEntries(STAGES);
 
 let contacts = [];
+let BOOK_URL = 'https://book.fccleaningcompany.com'; // customer booking page (personal link adds ?c=<token>); real value from the server below
 
 async function api(path, opts) {
   const res = await fetch(path, {
@@ -174,6 +175,8 @@ async function loadDraftsView() {
   }
 }
 
+api('/api/booking-settings').then((b) => { BOOK_URL = b.booking_url; }).catch(() => {});
+
 // ── calendar (busy blocks + booked visits) ──────────────
 const SLOT_MIN = 30, ROW_PX = 20, ROWS = 48;
 let calWeek = startOfWeek(new Date()), calAnchor = null;
@@ -332,7 +335,7 @@ async function openDrawer(id) {
     <div class="field"><label>Address ${c.address ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}" target="_blank" rel="noopener">map ↗</a>` : ''}</label><input id="f-address" value="${escapeHtml(c.address || '')}" /></div>
     <div class="field"><label>Source</label><input id="f-source" value="${escapeHtml(c.source || '')}" /></div>
     <div class="field"><label>Booking link <span class="dim">(send this so they can pick a visit time)</span></label>
-      <div class="copy-row"><input id="f-booklink" readonly value="${escapeHtml(`${location.origin}/book?c=${c.booking_token}`)}" /><button class="btn-secondary" data-copy="f-booklink">Copy</button></div></div>
+      <div class="copy-row"><input id="f-booklink" readonly value="${escapeHtml(`${BOOK_URL}?c=${c.booking_token}`)}" /><button class="btn-secondary" data-copy="f-booklink">Copy</button></div></div>
     <div style="margin-top:10px;display:flex;gap:8px"><button class="btn-primary" id="save-btn">Save</button>
       <button class="btn-secondary" id="delete-btn">Delete</button></div>
 

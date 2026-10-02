@@ -93,7 +93,8 @@ const TZ = { timeZone: 'Europe/London' };
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString('en-GB', { ...TZ, hour: 'numeric', minute: '2-digit', hour12: true }).replace(' ', '');
 const fmtLong = (iso) => new Date(iso).toLocaleString('en-GB', { ...TZ, weekday: 'long', day: 'numeric', month: 'long' }) + ', ' + fmtTime(iso);
 const params = new URLSearchParams(location.search);
-const manage = location.pathname.match(/^\/book\/manage\/([\w-]+)/);
+const BASE = location.pathname.startsWith('/book') ? '/book' : ''; // /book on crm.perchito.app, root on book.fccleaningcompany.com
+const manage = location.pathname.match(/\/manage\/([\w-]+)/);
 const ICON_CAL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>';
 const ICON_TICK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 10 17 19 7"/></svg>';
 
@@ -110,15 +111,15 @@ async function showManage(token) {
   $('#lead').textContent = 'Need to move or cancel it? No problem.';
   let a;
   try { a = await api(`/api/public/appointment/${token}`); }
-  catch (e) { app.innerHTML = `<p class="empty">${esc(e.message)}. <a href="/book">Book a new visit</a></p>`; return; }
+  catch (e) { app.innerHTML = `<p class="empty">${esc(e.message)}. <a href="${BASE || '/'}">Book a new visit</a></p>`; return; }
   if (a.status !== 'scheduled') {
-    app.innerHTML = `<div class="empty"><h2>This visit was cancelled</h2><p class="muted">Want to pick a new time?</p><div class="actions"><a class="btn" href="/book">Book a new visit</a></div></div>`;
+    app.innerHTML = `<div class="empty"><h2>This visit was cancelled</h2><p class="muted">Want to pick a new time?</p><div class="actions"><a class="btn" href="${BASE || '/'}">Book a new visit</a></div></div>`;
     return;
   }
   app.innerHTML = `
     <div class="summary">${ICON_CAL}<div><b>${esc(fmtLong(a.starts_at))}</b><br><span class="muted">${esc(a.address || '')}</span></div></div>
     <div class="actions">
-      <a class="btn" href="/book?r=${encodeURIComponent(token)}">Choose a different time</a>
+      <a class="btn" href="${BASE || '/'}?r=${encodeURIComponent(token)}">Choose a different time</a>
       <button class="btn danger" id="cancel">Cancel this visit</button>
     </div>
     <p class="err" id="err"></p>`;
@@ -127,7 +128,7 @@ async function showManage(token) {
     e.target.disabled = true;
     try {
       await api(`/api/public/appointment/${token}/cancel`, { method: 'POST' });
-      app.innerHTML = `<div class="done"><div class="tick">${ICON_TICK}</div><h2>Visit cancelled</h2><p class="muted">Thanks for letting us know. If you change your mind, you can book again any time.</p><div class="actions"><a class="btn ghost" href="/book">Book a new visit</a></div></div>`;
+      app.innerHTML = `<div class="done"><div class="tick">${ICON_TICK}</div><h2>Visit cancelled</h2><p class="muted">Thanks for letting us know. If you change your mind, you can book again any time.</p><div class="actions"><a class="btn ghost" href="${BASE || '/'}">Book a new visit</a></div></div>`;
     } catch (err) { $('#err').textContent = err.message; e.target.disabled = false; }
   });
 }
@@ -216,7 +217,7 @@ async function submit(e) {
       <h2>${esc(fmtLong(r.starts_at))}</h2>
       <p class="muted">${esc(v('address'))}</p>
       <p class="muted">${v('email') ? `A confirmation is on its way to ${esc(v('email'))}.` : 'Fernando will be in touch to confirm.'}</p>
-      <div class="actions"><a class="btn ghost" href="/book/manage/${r.token}">Change or cancel</a></div></div>`;
+      <div class="actions"><a class="btn ghost" href="${BASE}/manage/${r.token}">Change or cancel</a></div></div>`;
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (ex) {
     err.textContent = ex.message; go.disabled = false; go.textContent = data.rescheduling ? 'Confirm new time' : 'Confirm visit';

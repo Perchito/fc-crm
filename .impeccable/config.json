@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "plus jakarta sans",
+        "createdAt": "2026-10-02T09:13:40.004Z",
+        "reason": "Claude: Plus Jakarta Sans is FC Cleaning's existing brand font on fccleaningcompany.com (fc-cleaning-web index.html); booking page must match the brand"
+      }
+    ]
+  }
+}

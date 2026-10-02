@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { runDueSteps, enroll, advance, getSettings, saveSettings } from './lib/engine.mjs';
 import { emailConfigured, sendEmail } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
-import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, PUBLIC_URL } from './lib/booking.mjs';
+import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, PUBLIC_URL, BOOK_URL } from './lib/booking.mjs';
 
 const { DATABASE_URL, CRM_USER = 'fc', CRM_PASS, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -20,6 +20,14 @@ app.use(express.json());
 // and attach the visit to their lead.
 const MIN = 60_000;
 const sendBookPage = (req, res) => res.set('Cache-Control', 'no-cache').sendFile('book.html', { root: 'public' });
+// book.fccleaningcompany.com (docuseal's Cloudflare tunnel -> :4600) is booking-only:
+// the page lives at its root, and nothing else of the CRM is reachable on that host.
+app.use((req, res, next) => {
+  if (!/^book\./i.test(req.hostname)) return next();
+  if (req.path === '/' || /^\/manage\/[\w-]+$/.test(req.path)) return sendBookPage(req, res);
+  if (req.path.startsWith('/api/public/') || req.path === '/fc-logo.webp') return next();
+  res.redirect('/');
+});
 app.get(['/book', '/book/manage/:token'], sendBookPage);
 
 app.get('/api/public/slots', async (req, res) => {
@@ -467,7 +475,7 @@ app.post('/api/blocks/copy-week', async (req, res) => {
 });
 
 app.get('/api/booking-settings', async (req, res) => {
-  res.json({ ...(await getBooking(pool)), booking_url: `${PUBLIC_URL}/book`, ics_url: `${PUBLIC_URL}/cal/${await icsSecret(pool)}.ics` });
+  res.json({ ...(await getBooking(pool)), booking_url: BOOK_URL, ics_url: `${PUBLIC_URL}/cal/${await icsSecret(pool)}.ics` });
 });
 app.put('/api/booking-settings', async (req, res) => res.json(await saveBooking(pool, req.body)));
 
