@@ -439,7 +439,7 @@ app.get('/api/calendar', async (req, res) => {
   const { rows: blocks } = await pool.query(`select * from blocks where starts_at < $2 and ends_at > $1 order by starts_at`, [from, to]);
   const { rows: appts } = await pool.query(
     `select a.*, c.business, c.contact_name, c.address from appointments a join contacts c on c.id = a.contact_id
-     where a.status = 'scheduled' and a.starts_at < $2 and a.starts_at >= $1 - interval '1 day' order by a.starts_at`, [from, to]);
+     where a.status = 'scheduled' and a.starts_at < $2 and a.starts_at >= $1::timestamptz - interval '1 day' order by a.starts_at`, [from, to]);
   res.json({ blocks, appointments: appts });
 });
 
