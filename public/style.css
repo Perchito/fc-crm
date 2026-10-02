@@ -256,3 +256,22 @@ select.status-select { padding: 4px 10px; font-size: 13px; }
   .stat-cards { display: grid; grid-template-columns: 1fr 1fr; }
   .stat-card { min-width: 0; }
 }
+
+/* calendar edit sheet (bottom sheet on phones) */
+.cal-edit { border: 1px solid var(--border); border-radius: 14px; background: var(--card); color: var(--text); padding: 22px; width: min(420px, calc(100vw - 24px)); }
+.cal-edit::backdrop { background: rgba(0,0,0,.6); }
+.cal-edit h2 { margin: 0; font-size: 18px; }
+.cal-edit form { display: flex; flex-direction: column; gap: 12px; }
+.cal-edit label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-dim); }
+.cal-edit label[hidden] { display: none; }
+.cal-edit .ce-times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cal-edit .ce-check { flex-direction: row; align-items: center; gap: 10px; font-size: 14px; color: var(--text); }
+.cal-edit .ce-check input { width: 20px; height: 20px; accent-color: var(--accent); }
+.cal-edit .ce-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cal-edit .ce-more { border-top: 1px solid var(--border); padding-top: 12px; }
+.cal-edit .ce-more button[hidden] { display: none; }
+.cal-edit .ce-more:has(#ce-lead[hidden]) { grid-template-columns: 1fr; }
+.err-text { color: #f87171; font-size: 13px; margin: 0; min-height: 0; }
+@media (max-width: 700px) {
+  .cal-edit { margin: auto 0 0; width: 100vw; max-width: 100vw; border-radius: 16px 16px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); }
+}

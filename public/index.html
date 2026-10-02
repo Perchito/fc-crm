@@ -133,7 +133,7 @@
     </section>
 
     <section id="view-calendar" class="view hidden">
-      <div class="page-head"><h1>Calendar</h1><p>Block the hours you're working so customers can't book them: drag over them, or on a phone tap the start time and then the end time. Tap a shift to remove it.</p></div>
+      <div class="page-head"><h1>Calendar</h1><p>Block the hours you're working so customers can't book them: drag over them, or on a phone tap the start time and then the end time. Tap a shift or visit to move, change or delete it.</p></div>
       <div class="cal-toolbar">
         <div class="cal-nav">
           <button class="btn-secondary" id="cal-prev" aria-label="Previous week">‹</button>
@@ -146,6 +146,28 @@
       <div class="cal-days" id="cal-days"></div>
       <div class="cal-hint" id="cal-hint" hidden><span id="cal-hint-text"></span><button class="btn-secondary" id="cal-hint-cancel">Cancel</button></div>
       <div class="cal-wrap"><div class="cal" id="cal"></div></div>
+      <dialog id="cal-edit" class="cal-edit">
+        <form method="dialog" id="ce-form">
+          <h2 id="ce-title">Edit</h2>
+          <p class="dim-p" id="ce-sub"></p>
+          <label id="ce-name-row">Label<input id="ce-name" placeholder="Dave's Hot Chicken"></label>
+          <label>Day<input type="date" id="ce-date" required></label>
+          <div class="ce-times">
+            <label>Start<input type="time" id="ce-start" step="900" required></label>
+            <label>End<input type="time" id="ce-end" step="900" required></label>
+          </div>
+          <label class="ce-check" id="ce-notify-row"><input type="checkbox" id="ce-notify" checked> Email the customer about the change</label>
+          <p class="err-text" id="ce-err"></p>
+          <div class="ce-actions">
+            <button class="btn-primary" value="save" id="ce-save">Save</button>
+            <button class="btn-secondary" value="close" formnovalidate>Close</button>
+          </div>
+          <div class="ce-actions ce-more">
+            <button class="btn-secondary" value="lead" id="ce-lead" formnovalidate>Open lead</button>
+            <button class="btn-danger" value="delete" id="ce-delete" formnovalidate>Delete</button>
+          </div>
+        </form>
+      </dialog>
       <div class="grid-2 cal-cards">
         <div class="card">
           <h2>Booking link</h2>

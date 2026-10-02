@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { runDueSteps, enroll, advance, getSettings, saveSettings } from './lib/engine.mjs';
 import { emailConfigured, sendEmail } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
-import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, PUBLIC_URL, BOOK_URL } from './lib/booking.mjs';
+import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, sendCustomerCancelEmail, PUBLIC_URL, BOOK_URL } from './lib/booking.mjs';
 
 const { DATABASE_URL, CRM_USER = 'fc', CRM_PASS, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -366,11 +366,23 @@ app.patch('/api/appointments/:id', async (req, res) => {
   const updates = Object.keys(req.body).filter((k) => fields.includes(k));
   if (!updates.length) return res.status(400).json({ error: 'no valid fields' });
   const set = updates.map((k, i) => `${k} = $${i + 2}`).join(', ');
-  const { rows } = await pool.query(
+  const { rows: [before] } = await pool.query(`select * from appointments where id = $1`, [req.params.id]);
+  if (!before) return res.status(404).end();
+  const { rows: [appt] } = await pool.query(
     `update appointments set ${set} where id = $1 returning *`,
     [req.params.id, ...updates.map((k) => req.body[k])]
   );
-  res.json(rows[0]);
+  // moved or cancelled from the Calendar: log it, and email the customer unless notify === false
+  const moved = +new Date(before.starts_at) !== +new Date(appt.starts_at) || +new Date(before.ends_at) !== +new Date(appt.ends_at);
+  const cancelled = before.status !== 'cancelled' && appt.status === 'cancelled';
+  if (moved || cancelled) {
+    const { rows: [contact] } = await pool.query(`select * from contacts where id = $1`, [appt.contact_id]);
+    await pool.query(`insert into events (contact_id, type, body) values ($1,'appointment',$2)`, [appt.contact_id,
+      cancelled ? 'Site visit cancelled by us' : `Site visit moved to ${new Date(appt.starts_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}`]);
+    if (req.body.notify !== false && appt.status !== 'cancelled' && moved) sendBookingEmails({ contact, appt, rescheduled: true, byUs: true });
+    if (req.body.notify !== false && cancelled) sendCustomerCancelEmail(contact, appt);
+  }
+  res.json(appt);
 });
 
 // ── AI-drafted emails (awaiting review before send) ────
@@ -456,6 +468,15 @@ app.post('/api/blocks', async (req, res) => {
   if (!(new Date(ends_at) > new Date(starts_at))) return res.status(400).json({ error: 'end must be after start' });
   const { rows } = await pool.query(`insert into blocks (starts_at, ends_at, title) values ($1,$2,$3) returning *`, [starts_at, ends_at, title || 'Busy']);
   res.status(201).json(rows[0]);
+});
+
+app.patch('/api/blocks/:id', async (req, res) => {
+  const { starts_at, ends_at, title } = req.body;
+  if (!(new Date(ends_at) > new Date(starts_at))) return res.status(400).json({ error: 'end must be after start' });
+  const { rows: [b] } = await pool.query(`update blocks set starts_at = $2, ends_at = $3, title = coalesce(nullif($4,''), title) where id = $1 returning *`,
+    [req.params.id, starts_at, ends_at, title || '']);
+  if (!b) return res.status(404).end();
+  res.json(b);
 });
 
 app.delete('/api/blocks/:id', async (req, res) => {

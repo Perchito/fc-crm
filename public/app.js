@@ -183,7 +183,7 @@ const SLOT_MIN = 30, ROWS = 48;
 const calMobile = matchMedia('(max-width: 700px)');
 let ROW_PX = calMobile.matches ? 30 : 20;
 let calDay = (new Date().getDay() + 6) % 7; // 0 = Monday of calWeek
-let calWeek = startOfWeek(new Date()), calAnchor = null;
+let calWeek = startOfWeek(new Date()), calAnchor = null, calItems = {};
 function startOfWeek(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const atSlot = (day, i) => { const x = new Date(day); x.setMinutes(i * SLOT_MIN); return x; };
@@ -193,6 +193,7 @@ async function loadCalendarView(scrollTo7am = false) {
   const from = calWeek, to = addDays(calWeek, 7);
   const [{ blocks, appointments }, bs] = await Promise.all([
     api(`/api/calendar?from=${from.toISOString()}&to=${to.toISOString()}`), api('/api/booking-settings')]);
+  calItems = Object.fromEntries([...blocks.map((b) => [b.id, { ...b, kind: 'block' }]), ...appointments.map((a) => [a.id, { ...a, kind: 'appt' }])]);
   document.getElementById('cal-label').textContent =
     `${from.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${addDays(from, 6).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
   document.getElementById('cal-book-url').value = bs.booking_url;
@@ -235,7 +236,7 @@ async function loadCalendarView(scrollTo7am = false) {
     for (const a of appointments) {
       const end = a.ends_at ? new Date(a.ends_at).getTime() : new Date(a.starts_at).getTime() + 45 * 60000;
       const st = place(new Date(a.starts_at).getTime(), end, d);
-      if (st) col.insertAdjacentHTML('beforeend', `<button class="cal-ev appt" data-contact="${a.contact_id}" style="${st}">${escapeHtml(a.business || a.contact_name || a.title)}<span>${hhmm(a.starts_at)} · ${escapeHtml(a.title)}</span></button>`);
+      if (st) col.insertAdjacentHTML('beforeend', `<button class="cal-ev appt" data-appt="${a.id}" style="${st}">${escapeHtml(a.business || a.contact_name || a.title)}<span>${hhmm(a.starts_at)} · ${escapeHtml(a.title)}</span></button>`);
     }
   });
   // nothing is booked 10pm-7am, so each time the page opens, start the view at 7am
@@ -294,15 +295,65 @@ calEl.addEventListener('click', async (e) => {
     return;
   }
   if (!ev) return;
-  if (ev.dataset.block) {
-    if (!confirm('Remove this busy block?')) return;
-    await api(`/api/blocks/${ev.dataset.block}`, { method: 'DELETE' });
-    loadCalendarView();
-  } else if (ev.dataset.contact) {
-    if (!contacts.length) await loadContacts();
-    openDrawer(ev.dataset.contact);
-  }
+  calEdit(calItems[ev.dataset.block || ev.dataset.appt]);
 });
+
+// edit sheet: move / resize / relabel a shift, or move / cancel a booked visit
+const ceDlg = document.getElementById('cal-edit');
+let ceItem = null;
+const pad = (n) => String(n).padStart(2, '0');
+const dateVal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const timeVal = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function calEdit(item) {
+  if (!item) return;
+  ceItem = item;
+  const s = new Date(item.starts_at), e = new Date(item.ends_at || s.getTime() + 45 * 60000);
+  const appt = item.kind === 'appt';
+  document.getElementById('ce-title').textContent = appt ? `Visit — ${item.business || item.contact_name || ''}` : 'Shift / busy time';
+  document.getElementById('ce-sub').textContent = appt ? (item.address || '') : 'Customers can’t book during this time.';
+  document.getElementById('ce-name-row').hidden = appt;
+  document.getElementById('ce-name').value = appt ? '' : item.title;
+  document.getElementById('ce-date').value = dateVal(s);
+  document.getElementById('ce-start').value = timeVal(s);
+  document.getElementById('ce-end').value = timeVal(e);
+  document.getElementById('ce-notify-row').hidden = !appt;
+  document.getElementById('ce-notify').checked = true;
+  document.getElementById('ce-lead').hidden = !appt;
+  document.getElementById('ce-delete').textContent = appt ? 'Cancel visit' : 'Delete shift';
+  document.getElementById('ce-err').textContent = '';
+  ceDlg.showModal();
+}
+document.getElementById('ce-form').addEventListener('submit', async (e) => {
+  const action = e.submitter?.value;
+  if (action === 'close' || !ceItem) return;
+  e.preventDefault();
+  const appt = ceItem.kind === 'appt';
+  const notify = document.getElementById('ce-notify').checked;
+  const err = document.getElementById('ce-err');
+  try {
+    if (action === 'lead') {
+      ceDlg.close();
+      if (!contacts.length) await loadContacts();
+      return openDrawer(ceItem.contact_id);
+    }
+    if (action === 'delete') {
+      if (!confirm(appt ? `Cancel this visit?${notify ? ' The customer will be emailed.' : ''}` : 'Delete this shift?')) return;
+      if (appt) await api(`/api/appointments/${ceItem.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled', notify }) });
+      else await api(`/api/blocks/${ceItem.id}`, { method: 'DELETE' });
+    } else {
+      const d = document.getElementById('ce-date').value;
+      const start = new Date(`${d}T${document.getElementById('ce-start').value}`);
+      let end = new Date(`${d}T${document.getElementById('ce-end').value}`);
+      if (end <= start) end = new Date(end.getTime() + 86400000); // e.g. 18:00 -> 01:00 runs past midnight
+      const body = { starts_at: start.toISOString(), ends_at: end.toISOString() };
+      if (appt) await api(`/api/appointments/${ceItem.id}`, { method: 'PATCH', body: JSON.stringify({ ...body, notify }) });
+      else await api(`/api/blocks/${ceItem.id}`, { method: 'PATCH', body: JSON.stringify({ ...body, title: document.getElementById('ce-name').value.trim() }) });
+    }
+    ceDlg.close();
+    loadCalendarView();
+  } catch (ex) { err.textContent = String(ex.message || ex).replace(/^\{"error":"|"\}$/g, ''); }
+});
+ceDlg.addEventListener('click', (e) => { if (e.target === ceDlg) ceDlg.close(); }); // tap outside closes
 document.getElementById('cal-prev').addEventListener('click', () => { calWeek = addDays(calWeek, -7); loadCalendarView(); });
 document.getElementById('cal-next').addEventListener('click', () => { calWeek = addDays(calWeek, 7); loadCalendarView(); });
 document.getElementById('cal-today').addEventListener('click', () => { calWeek = startOfWeek(new Date()); calDay = (new Date().getDay() + 6) % 7; loadCalendarView(true); });
