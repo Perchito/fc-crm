@@ -1,6 +1,7 @@
 const STAGES = [
   ['new', 'New'],
   ['contacted', 'Contacted'],
+  ['visit_booked', 'Visit booked'],
   ['quoted', 'Quoted'],
   ['won', 'Won'],
   ['lost', 'Lost'],
@@ -173,6 +174,130 @@ async function loadDraftsView() {
   }
 }
 
+// ── calendar (busy blocks + booked visits) ──────────────
+const SLOT_MIN = 30, ROW_PX = 20, ROWS = 48;
+let calWeek = startOfWeek(new Date()), calAnchor = null;
+function startOfWeek(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const atSlot = (day, i) => { const x = new Date(day); x.setMinutes(i * SLOT_MIN); return x; };
+const hhmm = (d) => new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+async function loadCalendarView() {
+  const from = calWeek, to = addDays(calWeek, 7);
+  const [{ blocks, appointments }, bs] = await Promise.all([
+    api(`/api/calendar?from=${from.toISOString()}&to=${to.toISOString()}`), api('/api/booking-settings')]);
+  document.getElementById('cal-label').textContent =
+    `${from.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${addDays(from, 6).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  document.getElementById('cal-book-url').value = bs.booking_url;
+  document.getElementById('cal-ics-url').value = bs.ics_url;
+  for (const k of ['visit_minutes', 'gap_minutes', 'day_start', 'day_end', 'min_notice_hours', 'horizon_days']) document.getElementById(`bs-${k}`).value = bs[k];
+
+  const cal = document.getElementById('cal');
+  const today = new Date().toDateString();
+  let html = '<div class="cal-corner"></div>';
+  for (let d = 0; d < 7; d++) {
+    const day = addDays(from, d);
+    html += `<div class="cal-dayhead ${day.toDateString() === today ? 'today' : ''}">${day.toLocaleDateString('en-GB', { weekday: 'short' })} <b>${day.getDate()}</b></div>`;
+  }
+  html += '<div class="cal-gutter">' + Array.from({ length: 24 }, (_, h) => `<div style="height:${ROW_PX * 2}px">${h ? `${String(h).padStart(2, '0')}:00` : ''}</div>`).join('') + '</div>';
+  for (let d = 0; d < 7; d++) html += `<div class="cal-col" data-d="${d}" style="height:${ROWS * ROW_PX}px"></div>`;
+  cal.innerHTML = html;
+
+  const place = (startMs, endMs, d) => {
+    const dayStart = addDays(from, d).getTime(), dayEnd = addDays(from, d + 1).getTime();
+    const s = Math.max(startMs, dayStart), e = Math.min(endMs, dayEnd);
+    if (e <= s) return null;
+    return `top:${((s - dayStart) / 60000 / SLOT_MIN) * ROW_PX}px;height:${Math.max(((e - s) / 60000 / SLOT_MIN) * ROW_PX, 14)}px`;
+  };
+  cal.querySelectorAll('.cal-col').forEach((col) => {
+    const d = Number(col.dataset.d);
+    for (const b of blocks) {
+      const st = place(new Date(b.starts_at).getTime(), new Date(b.ends_at).getTime(), d);
+      if (st) col.insertAdjacentHTML('beforeend', `<button class="cal-ev block" data-block="${b.id}" style="${st}" title="Click to remove">${escapeHtml(b.title)}<span>${hhmm(b.starts_at)}–${hhmm(b.ends_at)}</span></button>`);
+    }
+    for (const a of appointments) {
+      const end = a.ends_at ? new Date(a.ends_at).getTime() : new Date(a.starts_at).getTime() + 45 * 60000;
+      const st = place(new Date(a.starts_at).getTime(), end, d);
+      if (st) col.insertAdjacentHTML('beforeend', `<button class="cal-ev appt" data-contact="${a.contact_id}" style="${st}">${escapeHtml(a.business || a.contact_name || a.title)}<span>${hhmm(a.starts_at)} · ${escapeHtml(a.title)}</span></button>`);
+    }
+  });
+  const wrap = cal.parentElement;
+  if (!wrap.dataset.scrolled) { wrap.scrollTop = 6 * 2 * ROW_PX; wrap.dataset.scrolled = '1'; }
+}
+
+// drag (mouse) or tap-start-then-tap-end (touch) to add a busy block
+function calSlotAt(col, clientY) { return Math.max(0, Math.min(ROWS - 1, Math.floor((clientY - col.getBoundingClientRect().top) / ROW_PX))); }
+function calPreview(col, a, b) {
+  col.querySelector('.cal-sel')?.remove();
+  const [lo, hi] = [Math.min(a, b), Math.max(a, b)];
+  col.insertAdjacentHTML('beforeend', `<div class="cal-sel" style="top:${lo * ROW_PX}px;height:${(hi - lo + 1) * ROW_PX}px">${hhmm(atSlot(addDays(calWeek, +col.dataset.d), lo))}–${hhmm(atSlot(addDays(calWeek, +col.dataset.d), hi + 1))}</div>`);
+}
+async function calCreate(col, a, b) {
+  const day = addDays(calWeek, +col.dataset.d);
+  const [lo, hi] = [Math.min(a, b), Math.max(a, b)];
+  await api('/api/blocks', { method: 'POST', body: JSON.stringify({ starts_at: atSlot(day, lo).toISOString(), ends_at: atSlot(day, hi + 1).toISOString(), title: "Dave's Hot Chicken" }) });
+  calAnchor = null;
+  loadCalendarView();
+}
+const calEl = document.getElementById('cal');
+let calDrag = null;
+calEl.addEventListener('pointerdown', (e) => {
+  const col = e.target.closest('.cal-col');
+  if (!col || e.target.closest('.cal-ev')) return;
+  if (e.pointerType !== 'mouse') return; // touch/pen: tap-tap via click below, so scrolling never selects
+  const i = calSlotAt(col, e.clientY);
+  calDrag = { col, a: i }; calPreview(col, i, i); e.preventDefault();
+});
+let calLastPointer = 'mouse';
+calEl.addEventListener('pointerdown', (e) => { calLastPointer = e.pointerType; }, true);
+calEl.addEventListener('pointermove', (e) => { if (calDrag) calPreview(calDrag.col, calDrag.a, calSlotAt(calDrag.col, e.clientY)); });
+window.addEventListener('pointerup', (e) => { if (!calDrag) return; const { col, a } = calDrag; calDrag = null; calCreate(col, a, calSlotAt(col, e.clientY)); });
+calEl.addEventListener('click', async (e) => {
+  const ev = e.target.closest('.cal-ev');
+  const col = e.target.closest('.cal-col');
+  if (!ev && col && calLastPointer !== 'mouse') {
+    const i = calSlotAt(col, e.clientY);
+    if (calAnchor && calAnchor.col === col) return calCreate(col, calAnchor.a, i);
+    document.querySelectorAll('.cal-sel').forEach((x) => x.remove());
+    calAnchor = { col, a: i }; calPreview(col, i, i);
+    return;
+  }
+  if (!ev) return;
+  if (ev.dataset.block) {
+    if (!confirm('Remove this busy block?')) return;
+    await api(`/api/blocks/${ev.dataset.block}`, { method: 'DELETE' });
+    loadCalendarView();
+  } else if (ev.dataset.contact) {
+    if (!contacts.length) await loadContacts();
+    openDrawer(ev.dataset.contact);
+  }
+});
+document.getElementById('cal-prev').addEventListener('click', () => { calWeek = addDays(calWeek, -7); loadCalendarView(); });
+document.getElementById('cal-next').addEventListener('click', () => { calWeek = addDays(calWeek, 7); loadCalendarView(); });
+document.getElementById('cal-today').addEventListener('click', () => { calWeek = startOfWeek(new Date()); loadCalendarView(); });
+document.getElementById('cal-copy').addEventListener('click', async () => {
+  const r = await api('/api/blocks/copy-week', { method: 'POST', body: JSON.stringify({ from: addDays(calWeek, -7).toISOString(), to: calWeek.toISOString() }) });
+  if (!r.copied) alert('Last week has no shifts to copy.');
+  loadCalendarView();
+});
+document.getElementById('cal-settings').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const v = (k) => document.getElementById(`bs-${k}`).value;
+  await api('/api/booking-settings', { method: 'PUT', body: JSON.stringify({
+    visit_minutes: +v('visit_minutes'), gap_minutes: +v('gap_minutes'), day_start: v('day_start'), day_end: v('day_end'),
+    min_notice_hours: +v('min_notice_hours'), horizon_days: +v('horizon_days') }) });
+  document.getElementById('bs-saved').textContent = ' Saved ✓';
+  setTimeout(() => { document.getElementById('bs-saved').textContent = ''; }, 1500);
+});
+// any [data-copy="<input id>"] button copies that input's value
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-copy]');
+  if (!btn) return;
+  const input = document.getElementById(btn.dataset.copy);
+  try { await navigator.clipboard.writeText(input.value); } catch { input.select(); document.execCommand('copy'); }
+  const t = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = t; }, 1500);
+});
+
 // ── drawer ──────────────────────────────────────────────
 async function openDrawer(id) {
   const drawer = document.getElementById('drawer');
@@ -206,6 +331,8 @@ async function openDrawer(id) {
     <div class="field"><label>Website ${/^https?:\/\//i.test(c.website || '') ? `<a href="${escapeHtml(c.website)}" target="_blank" rel="noopener">open ↗</a>` : ''}</label><input id="f-website" value="${escapeHtml(c.website || '')}" /></div>
     <div class="field"><label>Address ${c.address ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}" target="_blank" rel="noopener">map ↗</a>` : ''}</label><input id="f-address" value="${escapeHtml(c.address || '')}" /></div>
     <div class="field"><label>Source</label><input id="f-source" value="${escapeHtml(c.source || '')}" /></div>
+    <div class="field"><label>Booking link <span class="dim">(send this so they can pick a visit time)</span></label>
+      <div class="copy-row"><input id="f-booklink" readonly value="${escapeHtml(`${location.origin}/book?c=${c.booking_token}`)}" /><button class="btn-secondary" data-copy="f-booklink">Copy</button></div></div>
     <div style="margin-top:10px;display:flex;gap:8px"><button class="btn-primary" id="save-btn">Save</button>
       <button class="btn-secondary" id="delete-btn">Delete</button></div>
 
@@ -325,7 +452,7 @@ function closeDrawer() {
 document.getElementById('drawer-backdrop').addEventListener('click', closeDrawer);
 
 // ── tabs ─────────────────────────────────────────────────
-const loaders = { dashboard: loadDashboard, drafts: loadDraftsView, campaigns: loadCampaignsView, settings: loadSettingsView };
+const loaders = { dashboard: loadDashboard, drafts: loadDraftsView, calendar: loadCalendarView, campaigns: loadCampaignsView, settings: loadSettingsView };
 for (const btn of document.querySelectorAll('#tabs .tab')) {
   btn.addEventListener('click', () => {
     document.querySelectorAll('#tabs .tab').forEach((b) => b.classList.remove('active'));

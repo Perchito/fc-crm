@@ -36,6 +36,10 @@
         <svg viewBox="0 0 24 24"><path d="M3 11 20 4l-4 17-5-7-7-3Z"/></svg>
         Campaigns
       </button>
+      <button data-view="calendar" class="tab">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+        Calendar
+      </button>
       <button data-view="settings" class="tab">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>
         Settings
@@ -114,6 +118,7 @@
               <option value="">— manual only —</option>
               <option value="new">New</option>
               <option value="contacted">Contacted</option>
+              <option value="visit_booked">Visit booked</option>
               <option value="quoted">Quoted</option>
               <option value="won">Won</option>
               <option value="lost">Lost</option>
@@ -125,6 +130,42 @@
         </form>
       </div>
       <div id="campaigns-list"></div>
+    </section>
+
+    <section id="view-calendar" class="view hidden">
+      <div class="page-head"><h1>Calendar</h1><p>Drag over the hours you're working (tap start then end on a phone) — customers can't book those. Click a shift to remove it.</p></div>
+      <div class="cal-toolbar">
+        <div class="cal-nav">
+          <button class="btn-secondary" id="cal-prev" aria-label="Previous week">‹</button>
+          <button class="btn-secondary" id="cal-today">Today</button>
+          <button class="btn-secondary" id="cal-next" aria-label="Next week">›</button>
+          <strong id="cal-label"></strong>
+        </div>
+        <button class="btn-secondary" id="cal-copy">Copy last week's shifts</button>
+      </div>
+      <div class="cal-wrap"><div class="cal" id="cal"></div></div>
+      <div class="grid-2 cal-cards">
+        <div class="card">
+          <h2>Booking link</h2>
+          <p class="dim-p">Send this to customers so they can pick a visit time. Each lead also has a personal link (prefilled with their details) in their drawer.</p>
+          <div class="copy-row"><input id="cal-book-url" readonly><button class="btn-primary" data-copy="cal-book-url">Copy</button></div>
+          <h2 style="margin-top:22px">Phone calendar</h2>
+          <p class="dim-p">Subscribe once and every booked visit shows up on your phone. iPhone: Settings → Calendar → Accounts → Add Account → Other → Add Subscribed Calendar, paste this.</p>
+          <div class="copy-row"><input id="cal-ics-url" readonly><button class="btn-primary" data-copy="cal-ics-url">Copy</button></div>
+        </div>
+        <div class="card">
+          <h2>Visit settings</h2>
+          <form id="cal-settings" class="cal-settings">
+            <label>Visit length (min)<input type="number" id="bs-visit_minutes" min="15" step="5"></label>
+            <label>Gap before/after (min)<input type="number" id="bs-gap_minutes" min="0" step="5"></label>
+            <label>Earliest start<input type="time" id="bs-day_start"></label>
+            <label>Latest finish<input type="time" id="bs-day_end"></label>
+            <label>Minimum notice (hours)<input type="number" id="bs-min_notice_hours" min="0"></label>
+            <label>Bookable ahead (days)<input type="number" id="bs-horizon_days" min="1"></label>
+            <button class="btn-primary">Save</button><span id="bs-saved" class="dim-p"></span>
+          </form>
+        </div>
+      </div>
     </section>
 
     <section id="view-settings" class="view hidden">

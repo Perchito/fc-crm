@@ -1,8 +1,11 @@
+process.env.TZ ||= 'Europe/London'; // booking slots are London wall-clock times
 import express from 'express';
 import pg from 'pg';
+import { readFile } from 'node:fs/promises';
 import { runDueSteps, enroll, advance, getSettings, saveSettings } from './lib/engine.mjs';
 import { emailConfigured, sendEmail } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
+import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, PUBLIC_URL } from './lib/booking.mjs';
 
 const { DATABASE_URL, CRM_USER = 'fc', CRM_PASS, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -10,6 +13,120 @@ if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
 const pool = new pg.Pool({ connectionString: DATABASE_URL });
 const app = express();
 app.use(express.json());
+
+// ── public: customer booking page + phone calendar feed ─────────────────────
+// Registered before the Basic-auth gate on purpose: customers book without a
+// login. Personal links (/book?c=<contact.booking_token>) prefill their details
+// and attach the visit to their lead.
+const MIN = 60_000;
+const sendBookPage = (req, res) => res.set('Cache-Control', 'no-cache').sendFile('book.html', { root: 'public' });
+app.get(['/book', '/book/manage/:token'], sendBookPage);
+
+app.get('/api/public/slots', async (req, res) => {
+  const cfg = await getBooking(pool);
+  let contact = null, appt = null;
+  if (req.query.c) {
+    const { rows: [c] } = await pool.query(`select business, contact_name, email, phone, address from contacts where booking_token = $1`, [String(req.query.c)]);
+    contact = c || null;
+  }
+  if (req.query.r) {
+    const { rows: [a] } = await pool.query(
+      `select a.id, a.starts_at, c.business, c.contact_name, c.email, c.phone, c.address from appointments a
+       join contacts c on c.id = a.contact_id where a.token = $1 and a.status = 'scheduled'`, [String(req.query.r)]);
+    if (a) { appt = a; contact = { business: a.business, contact_name: a.contact_name, email: a.email, phone: a.phone, address: a.address }; }
+  }
+  res.json({
+    visit_minutes: cfg.visit_minutes,
+    contact,
+    rescheduling: appt ? { starts_at: appt.starts_at } : null,
+    days: await freeSlots(pool, cfg, { excludeApptId: appt?.id }),
+  });
+});
+
+app.post('/api/public/book', async (req, res) => {
+  const b = req.body || {};
+  const clean = (v, n = 200) => String(v ?? '').trim().slice(0, n);
+  const f = { contact_name: clean(b.name), business: clean(b.business), email: clean(b.email).toLowerCase(), phone: clean(b.phone, 40), address: clean(b.address, 300), notes: clean(b.notes, 1000) };
+  const start = new Date(b.starts_at);
+  if (!f.contact_name || !f.address || (!f.email && !f.phone)) return res.status(400).json({ error: 'Please add your name, the address for the visit, and an email or phone number.' });
+  if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) return res.status(400).json({ error: 'That email address doesn’t look right.' });
+  if (isNaN(start)) return res.status(400).json({ error: 'Please pick a time.' });
+
+  const cfg = await getBooking(pool);
+  const client = await pool.connect();
+  let contact, appt, old = null;
+  try {
+    await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(4600)'); // one booking at a time: no double-booking a slot
+    if (b.reschedule) {
+      ({ rows: [old] } = await client.query(`select * from appointments where token = $1 and status = 'scheduled'`, [clean(b.reschedule, 64)]));
+    }
+    if (!(await isFree(client, cfg, start, old?.id))) {
+      await client.query('rollback');
+      return res.status(409).json({ error: 'Sorry — that time was just taken. Please pick another.' });
+    }
+    if (old) ({ rows: [contact] } = await client.query(`select * from contacts where id = $1`, [old.contact_id]));
+    if (!contact && b.c) ({ rows: [contact] } = await client.query(`select * from contacts where booking_token = $1`, [clean(b.c, 64)]));
+    if (!contact && f.email) ({ rows: [contact] } = await client.query(`select * from contacts where lower(email) = $1`, [f.email]));
+    if (contact) {
+      ({ rows: [contact] } = await client.query(
+        `update contacts set contact_name = coalesce(nullif($2,''), contact_name), business = coalesce(nullif($3,''), business),
+           email = coalesce(email, nullif($4,'')), phone = coalesce(nullif($5,''), phone), address = coalesce(nullif($6,''), address), updated_at = now()
+         where id = $1 returning *`, [contact.id, f.contact_name, f.business, f.email, f.phone, f.address]));
+    } else {
+      ({ rows: [contact] } = await client.query(
+        `insert into contacts (contact_name, business, email, phone, address, source) values ($1,$2,nullif($3,''),$4,$5,'booking-page') returning *`,
+        [f.contact_name, f.business || null, f.email, f.phone || null, f.address]));
+    }
+    if (old) {
+      await client.query(`update appointments set status = 'cancelled' where id = $1`, [old.id]);
+    }
+    ({ rows: [appt] } = await client.query(
+      `insert into appointments (contact_id, title, starts_at, ends_at, notes) values ($1,'Site visit',$2,$3,$4) returning *`,
+      [contact.id, start, new Date(start.getTime() + cfg.visit_minutes * MIN), f.notes || null]));
+    await client.query(`insert into events (contact_id, type, body) values ($1,'appointment',$2)`,
+      [contact.id, `${old ? 'Rescheduled' : 'Booked'} site visit via booking page: ${start.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}`]);
+    if (['new', 'contacted'].includes(contact.pipeline_stage)) {
+      await client.query(`update contacts set pipeline_stage = 'visit_booked', updated_at = now() where id = $1`, [contact.id]);
+      await client.query(`insert into events (contact_id, type, body) values ($1,'stage_change','visit_booked')`, [contact.id]);
+    }
+    await client.query('commit');
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    console.error('booking failed:', err);
+    return res.status(500).json({ error: 'Something went wrong — please call us instead.' });
+  } finally {
+    client.release();
+  }
+  sendBookingEmails({ contact, appt, rescheduled: !!old }); // fire-and-forget; never blocks the booking
+  res.status(201).json({ token: appt.token, starts_at: appt.starts_at, ends_at: appt.ends_at });
+});
+
+app.get('/api/public/appointment/:token', async (req, res) => {
+  const { rows: [a] } = await pool.query(
+    `select a.starts_at, a.ends_at, a.status, c.business, c.contact_name, c.address from appointments a
+     join contacts c on c.id = a.contact_id where a.token = $1`, [req.params.token]);
+  if (!a) return res.status(404).json({ error: 'Booking not found' });
+  res.json(a);
+});
+
+app.post('/api/public/appointment/:token/cancel', async (req, res) => {
+  const { rows: [a] } = await pool.query(`update appointments set status = 'cancelled' where token = $1 and status = 'scheduled' returning *`, [req.params.token]);
+  if (!a) return res.status(404).json({ error: 'Booking not found or already cancelled' });
+  const { rows: [c] } = await pool.query(`select * from contacts where id = $1`, [a.contact_id]);
+  await pool.query(`insert into events (contact_id, type, body) values ($1,'appointment','Customer cancelled their site visit')`, [a.contact_id]);
+  sendCancelEmail(c, a);
+  res.json({ ok: true });
+});
+
+app.get('/cal/:secret.ics', async (req, res) => {
+  if (req.params.secret !== await icsSecret(pool)) return res.status(404).end();
+  const cfg = await getBooking(pool);
+  const { rows } = await pool.query(
+    `select a.*, c.business, c.contact_name, c.phone, c.email, c.address from appointments a join contacts c on c.id = a.contact_id
+     where a.status = 'scheduled' and a.starts_at > now() - interval '60 days' order by a.starts_at`);
+  res.type('text/calendar').set('Cache-Control', 'no-cache').send(buildIcs(rows, cfg.visit_minutes));
+});
 
 // HTTP Basic auth (same pattern as fc-outreach /ops) — skipped entirely if no
 // CRM_PASS is set, so local dev works without fuss.
@@ -46,7 +163,7 @@ if (CRM_PASS) {
   });
 }
 
-const STAGES = ['new', 'contacted', 'quoted', 'won', 'lost'];
+const STAGES = ['new', 'contacted', 'visit_booked', 'quoted', 'won', 'lost'];
 
 // booleans only — never echoes the actual credentials
 app.get('/api/health', (req, res) => res.json({ email: emailConfigured(), sms: smsConfigured() }));
@@ -315,6 +432,45 @@ app.get('/api/activity', async (req, res) => {
   res.json(rows);
 });
 
+// ── calendar: busy blocks + booking settings ───────────
+app.get('/api/calendar', async (req, res) => {
+  const from = new Date(req.query.from), to = new Date(req.query.to);
+  if (isNaN(from) || isNaN(to)) return res.status(400).json({ error: 'from and to required' });
+  const { rows: blocks } = await pool.query(`select * from blocks where starts_at < $2 and ends_at > $1 order by starts_at`, [from, to]);
+  const { rows: appts } = await pool.query(
+    `select a.*, c.business, c.contact_name, c.address from appointments a join contacts c on c.id = a.contact_id
+     where a.status = 'scheduled' and a.starts_at < $2 and a.starts_at >= $1 - interval '1 day' order by a.starts_at`, [from, to]);
+  res.json({ blocks, appointments: appts });
+});
+
+app.post('/api/blocks', async (req, res) => {
+  const { starts_at, ends_at, title } = req.body;
+  if (!(new Date(ends_at) > new Date(starts_at))) return res.status(400).json({ error: 'end must be after start' });
+  const { rows } = await pool.query(`insert into blocks (starts_at, ends_at, title) values ($1,$2,$3) returning *`, [starts_at, ends_at, title || 'Busy']);
+  res.status(201).json(rows[0]);
+});
+
+app.delete('/api/blocks/:id', async (req, res) => {
+  await pool.query('delete from blocks where id = $1', [req.params.id]);
+  res.status(204).end();
+});
+
+// Copy every block from the week starting `from` into the week starting `to` (rota repeats)
+app.post('/api/blocks/copy-week', async (req, res) => {
+  const from = new Date(req.body.from), to = new Date(req.body.to);
+  if (isNaN(from) || isNaN(to)) return res.status(400).json({ error: 'from and to required' });
+  const { rowCount } = await pool.query(
+    `insert into blocks (starts_at, ends_at, title)
+     select starts_at + ($2::timestamptz - $1::timestamptz), ends_at + ($2::timestamptz - $1::timestamptz), title
+     from blocks where starts_at >= $1 and starts_at < $1::timestamptz + interval '7 days'`, [from, to]);
+  res.json({ copied: rowCount });
+});
+
+app.get('/api/booking-settings', async (req, res) => {
+  res.json({ ...(await getBooking(pool)), booking_url: `${PUBLIC_URL}/book`, ics_url: `${PUBLIC_URL}/cal/${await icsSecret(pool)}.ics` });
+});
+app.put('/api/booking-settings', async (req, res) => res.json(await saveBooking(pool, req.body)));
+
 // ── settings + suppression ─────────────────────────────
 app.get('/api/settings', async (req, res) => res.json(await getSettings(pool)));
 app.put('/api/settings', async (req, res) => res.json(await saveSettings(pool, req.body)));
@@ -340,6 +496,11 @@ app.delete('/api/suppression/:email', async (req, res) => {
   res.status(204).end();
 });
 
+// Cloudflare tells browsers to cache .js/.css for 4h, so stamp them with this
+// process's start time: every deploy (restart) makes browsers fetch fresh copies.
+const VERSION = Date.now();
+const indexHtml = (await readFile('public/index.html', 'utf8')).replace(/(app\.js|style\.css)"/g, `$1?v=${VERSION}"`);
+app.get(['/', '/index.html'], (req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml));
 app.use(express.static('public'));
 
 app.listen(PORT, () => console.log(`fc-crm listening on :${PORT}`));

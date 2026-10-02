@@ -116,3 +116,17 @@ create table if not exists suppression (
   reason     text not null default '',
   created_at timestamptz not null default now()
 );
+
+-- ─────────────────────────────── booking calendar ───────────────────────────────
+-- Busy time (Fernando's Dave's Hot Chicken shifts etc.) — no visits can be booked over these.
+create table if not exists blocks (
+  id         uuid primary key default gen_random_uuid(),
+  starts_at  timestamptz not null,
+  ends_at    timestamptz not null check (ends_at > starts_at),
+  title      text not null default 'Busy',
+  created_at timestamptz not null default now()
+);
+create index if not exists blocks_starts_idx on blocks (starts_at);
+-- token = the customer's private manage/cancel link; per-contact token = their personal booking link
+alter table appointments add column if not exists token text unique default encode(gen_random_bytes(12), 'hex');
+alter table contacts add column if not exists booking_token text unique default encode(gen_random_bytes(9), 'hex');
