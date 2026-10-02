@@ -185,7 +185,7 @@ const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); r
 const atSlot = (day, i) => { const x = new Date(day); x.setMinutes(i * SLOT_MIN); return x; };
 const hhmm = (d) => new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
-async function loadCalendarView() {
+async function loadCalendarView(scrollTo7am = false) {
   const from = calWeek, to = addDays(calWeek, 7);
   const [{ blocks, appointments }, bs] = await Promise.all([
     api(`/api/calendar?from=${from.toISOString()}&to=${to.toISOString()}`), api('/api/booking-settings')]);
@@ -224,8 +224,8 @@ async function loadCalendarView() {
       if (st) col.insertAdjacentHTML('beforeend', `<button class="cal-ev appt" data-contact="${a.contact_id}" style="${st}">${escapeHtml(a.business || a.contact_name || a.title)}<span>${hhmm(a.starts_at)} · ${escapeHtml(a.title)}</span></button>`);
     }
   });
-  const wrap = cal.parentElement;
-  if (!wrap.dataset.scrolled) { wrap.scrollTop = 6 * 2 * ROW_PX; wrap.dataset.scrolled = '1'; }
+  // nothing is booked 10pm-7am, so each time the page opens, start the view at 7am
+  if (scrollTo7am) cal.parentElement.scrollTop = 7 * (60 / SLOT_MIN) * ROW_PX;
 }
 
 // drag (mouse) or tap-start-then-tap-end (touch) to add a busy block
@@ -455,7 +455,7 @@ function closeDrawer() {
 document.getElementById('drawer-backdrop').addEventListener('click', closeDrawer);
 
 // ── tabs ─────────────────────────────────────────────────
-const loaders = { dashboard: loadDashboard, drafts: loadDraftsView, calendar: loadCalendarView, campaigns: loadCampaignsView, settings: loadSettingsView };
+const loaders = { dashboard: loadDashboard, drafts: loadDraftsView, calendar: () => loadCalendarView(true), campaigns: loadCampaignsView, settings: loadSettingsView };
 for (const btn of document.querySelectorAll('#tabs .tab')) {
   btn.addEventListener('click', () => {
     document.querySelectorAll('#tabs .tab').forEach((b) => b.classList.remove('active'));
