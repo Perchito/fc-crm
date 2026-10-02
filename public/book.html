@@ -187,6 +187,7 @@ function render() {
   app.querySelectorAll('.day').forEach((b) => b.addEventListener('click', () => { day = data.days.find((d) => d.date === b.dataset.date); slot = null; keepForm(render); }));
   app.querySelectorAll('.time').forEach((b) => b.addEventListener('click', () => { slot = b.dataset.slot; keepForm(render); $('#details').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
   $('#f').addEventListener('submit', submit);
+  app.querySelector('.day[aria-pressed="true"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
 }
 
 // re-render without losing anything typed
