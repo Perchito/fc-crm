@@ -225,7 +225,7 @@ async function loadCalendarView(scrollTo7am = false) {
     }
   });
   // nothing is booked 10pm-7am, so each time the page opens, start the view at 7am
-  if (scrollTo7am) cal.parentElement.scrollTop = 7 * (60 / SLOT_MIN) * ROW_PX;
+  if (scrollTo7am) cal.parentElement.scrollTop = 7 * (60 / SLOT_MIN) * ROW_PX - 12; // -12 keeps the "07:00" label visible
 }
 
 // drag (mouse) or tap-start-then-tap-end (touch) to add a busy block
