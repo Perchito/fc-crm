@@ -36,6 +36,7 @@ import { ensureSignature, withSignature } from '../lib/signature.mjs';
 import { subjectFor, bodyFor, FOLLOW_UP } from '../lib/leadTemplate.mjs';
 import { draftEmailAI } from '../lib/aiDraft.mjs';
 import { checkEmail } from '../lib/emailCheck.mjs';
+import { BOOK_URL } from '../lib/booking.mjs';
 
 const run = promisify(execFile);
 const { DATABASE_URL } = process.env;
@@ -104,6 +105,10 @@ async function campaignNamed(pool, name) {
 
 // Draft step 0 for a contact and enrol it (next_due_at null = waits for Luis to send it).
 async function addDraft(pool, campaignId, contact, body) {
+  // personal booking link, added in code just above the sign-off (not left to the LLM)
+  const link = `If it's easier, you can pick a time for a quick visit here: ${BOOK_URL}?c=${contact.booking_token}`;
+  const at = body.search(/\n\s*Best,\s*\n/);
+  body = at === -1 ? `${body}\n\n${link}` : `${body.slice(0, at).trimEnd()}\n\n${link}${body.slice(at)}`;
   const { rows: [enr] } = await pool.query(
     `insert into enrollments (campaign_id, contact_id, next_due_at) values ($1,$2,null) returning id`,
     [campaignId, contact.id]
@@ -207,7 +212,7 @@ async function main() {
       const { rows } = await pool.query(
         `insert into contacts (business, contact_name, email, phone, address, website, notes, source)
          values ($1,$2,$3,$4,$5,$6,$7,'ai-discover')
-         on conflict do nothing returning id, business`,
+         on conflict do nothing returning id, business, booking_token`,
         [l.business || null, l.contactName || null, l.email, l.phone || null, l.address || null, l.website || null,
          [l.type, l.about].filter(Boolean).join('\n\n')]
       );
