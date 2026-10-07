@@ -25,7 +25,7 @@ const sendBookPage = (req, res) => res.set('Cache-Control', 'no-cache').sendFile
 app.use((req, res, next) => {
   if (!/^book\./i.test(req.hostname)) return next();
   if (req.path === '/' || /^\/manage\/[\w-]+$/.test(req.path)) return sendBookPage(req, res);
-  if (req.path.startsWith('/api/public/') || req.path === '/fc-logo.webp') return next();
+  if (req.path.startsWith('/api/public/') || /^\/fc-logo\.(webp|png)$/.test(req.path)) return next();
   res.redirect('/');
 });
 app.get(['/book', '/book/manage/:token'], sendBookPage);
