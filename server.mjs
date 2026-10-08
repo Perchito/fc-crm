@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { runDueSteps, enroll, advance, getSettings, saveSettings } from './lib/engine.mjs';
 import { emailConfigured, sendEmail } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
-import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, sendCustomerCancelEmail, PUBLIC_URL, BOOK_URL } from './lib/booking.mjs';
+import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, sendCustomerCancelEmail, sendReminders, PUBLIC_URL, BOOK_URL } from './lib/booking.mjs';
 
 const { DATABASE_URL, CRM_USER = 'fc', CRM_PASS, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -536,3 +536,4 @@ app.listen(PORT, () => console.log(`fc-crm listening on :${PORT}`));
 
 setInterval(() => runDueSteps(pool).catch((err) => console.error('engine tick failed:', err)), Number(ENGINE_TICK_MS));
 runDueSteps(pool).catch((err) => console.error('engine tick failed:', err));
+setInterval(() => sendReminders(pool).catch((err) => console.error('reminders failed:', err)), 15 * 60_000);

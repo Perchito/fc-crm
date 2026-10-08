@@ -130,3 +130,5 @@ create index if not exists blocks_starts_idx on blocks (starts_at);
 -- token = the customer's private manage/cancel link; per-contact token = their personal booking link
 alter table appointments add column if not exists token text unique default encode(gen_random_bytes(12), 'hex');
 alter table contacts add column if not exists booking_token text unique default encode(gen_random_bytes(9), 'hex');
+-- set when the 24h-before reminder email has gone out (so it's sent once)
+alter table appointments add column if not exists reminded_at timestamptz;
