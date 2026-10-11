@@ -551,16 +551,28 @@ function newTask(t = {}) {
     return api(`/api/tasks/${t.id}`, { method: 'PATCH', body: JSON.stringify(body) });
   } }).then((r) => { if (r) { toast('Saved'); refreshNavCount(); } return r; });
 }
-// customer picker: <input list> filled as you type; the chosen label maps back to an id
-let custCache = [];
+// customer picker: <input list> filled as you type. Every suggestion ever shown is remembered
+// (label → id), so choosing one never depends on the latest search — picking a suggestion
+// fires another input event whose search (for the full "Name — email" text) finds nothing.
+const custLabel = (c) => `${c.business || c.contact_name}${c.email ? ` — ${c.email}` : ''}`;
+const custSeen = new Map();
 document.addEventListener('input', debounce(async (e) => {
   if (e.target.getAttribute?.('list') !== 'cust-list') return;
   const q = e.target.value.trim();
-  if (q.length < 2) return;
-  custCache = await api(`/api/contacts?q=${encodeURIComponent(q)}&limit=15`).catch(() => []);
-  document.getElementById('cust-list').innerHTML = custCache.map((c) => `<option value="${esc(c.business || c.contact_name)}${c.email ? ` — ${esc(c.email)}` : ''}">`).join('');
+  if (q.length < 2 || custSeen.has(q)) return;
+  const rows = await api(`/api/contacts?q=${encodeURIComponent(q)}&limit=15`).catch(() => []);
+  if (!rows.length) return; // keep the current suggestions
+  for (const c of rows) custSeen.set(custLabel(c), c.id);
+  const list = document.getElementById('cust-list');
+  if (list) list.innerHTML = rows.map((c) => `<option value="${esc(custLabel(c))}">`).join('');
 }, 200));
-const custIdFromList = (f, text) => custCache.find((c) => `${c.business || c.contact_name}${c.email ? ` — ${c.email}` : ''}` === text)?.id;
+// exact label, or a unique business-name match if the suggestion wasn't tapped
+function custIdFromList(f, text) {
+  const t = String(text || '').trim();
+  if (custSeen.has(t)) return custSeen.get(t);
+  const hits = [...custSeen].filter(([l]) => l.toLowerCase().startsWith(t.toLowerCase()) && t.length >= 3);
+  return new Set(hits.map(([, id]) => id)).size === 1 ? hits[0][1] : null;
+}
 async function refreshNavCount() {
   const n = (await api('/api/tasks?view=overdue').catch(() => [])).length;
   const b = document.getElementById('nav-overdue');
