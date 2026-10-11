@@ -99,21 +99,100 @@ function pickAndUpload(query, done) {
   });
   input.click();
 }
+// PDF preview drawn with PDF.js (vendored in /vendor/pdfjs): every page fitted to the width,
+// pinch or − / + to zoom. (Phones show a PDF in an <iframe> as one fixed, unzoomable page.)
+let pdfjsLib = null;
+async function loadPdfJs() {
+  if (!pdfjsLib) {
+    pdfjsLib = await import('/vendor/pdfjs/pdf.min.mjs');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+  }
+  return pdfjsLib;
+}
 function previewPdf(url, title) {
   const dl = `${url}${url.includes('?') ? '&' : '?'}download=1`;
   modalEl.className = 'modal pdf-modal';
   modalEl.innerHTML = `<div class="pdf-bar"><b>${esc(title)}</b>
       <a class="btn-primary btn-sm" href="${esc(dl)}">Download</a>
-      <a class="btn-secondary btn-sm" href="${esc(url)}" target="_blank" rel="noopener">Open</a>
+      <a class="btn-secondary btn-sm pdf-open" href="${esc(url)}" target="_blank" rel="noopener">Open</a>
       <button type="button" class="pdf-close" aria-label="Close preview">✕</button></div>
-    <iframe src="${esc(url)}" title="${esc(title)}"></iframe>
-    <p class="pdf-hint">On a phone, “Open” shows every page in the PDF viewer, where you can also share or save it.</p>`;
+    <div class="pdf-pages" tabindex="0"><div class="pdf-stack"><div class="skel" style="height:60vh"></div></div></div>
+    <div class="pdf-zoom" role="group" aria-label="Zoom"><button type="button" data-z="-">−</button><button type="button" data-z="fit" class="pdf-pct">100%</button><button type="button" data-z="+">+</button></div>`;
   modalEl.querySelector('.pdf-close').onclick = () => modalEl.close();
-  modalEl.showModal();                       // Escape closes it too (native dialog)
+  modalEl.showModal();
   history.pushState({ pdf: 1 }, '', location.href); // phone back button closes the preview
   const onPop = () => { if (modalEl.open) modalEl.close(); };
   window.addEventListener('popstate', onPop, { once: true });
-  modalEl.addEventListener('close', () => { window.removeEventListener('popstate', onPop); if (history.state?.pdf) history.back(); }, { once: true });
+  let closed = false;
+  modalEl.addEventListener('close', () => { closed = true; window.removeEventListener('popstate', onPop); if (history.state?.pdf) history.back(); }, { once: true });
+
+  const box = modalEl.querySelector('.pdf-pages'), stack = modalEl.querySelector('.pdf-stack'), pct = modalEl.querySelector('.pdf-pct');
+  let doc = null, pages = [], zoom = 1, renderTimer = null;
+  const fitWidth = () => box.clientWidth - 24;
+  // canvases are sized by CSS instantly (smooth pinch); re-rendered sharp shortly after
+  const layout = () => {
+    for (const pg of pages) { const w = fitWidth() * zoom; pg.canvas.style.width = `${w}px`; pg.canvas.style.height = `${w * pg.ratio}px`; }
+    pct.textContent = `${Math.round(zoom * 100)}%`;
+    clearTimeout(renderTimer); renderTimer = setTimeout(renderAll, 200);
+  };
+  const renderAll = async () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    for (const pg of pages) {
+      if (closed) return;
+      const cssW = fitWidth() * zoom, scale = (cssW / pg.base.width) * dpr;
+      if (pg.scale === scale) continue;
+      pg.scale = scale;
+      const vp = pg.page.getViewport({ scale });
+      const c = document.createElement('canvas');
+      c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+      await pg.page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      pg.canvas.width = c.width; pg.canvas.height = c.height;
+      pg.canvas.getContext('2d').drawImage(c, 0, 0);
+    }
+  };
+  const setZoom = (z, anchor) => {
+    const old = zoom;
+    zoom = Math.min(4, Math.max(0.5, z));
+    // keep the point under the fingers / centre in place
+    const ax = anchor?.x ?? box.clientWidth / 2, ay = anchor?.y ?? box.clientHeight / 2;
+    const sx = box.scrollLeft + ax, sy = box.scrollTop + ay;
+    layout();
+    box.scrollLeft = sx * (zoom / old) - ax; box.scrollTop = sy * (zoom / old) - ay;
+  };
+  modalEl.querySelector('.pdf-zoom').onclick = (e) => {
+    const z = e.target.dataset.z;
+    if (z === '+') setZoom(zoom * 1.25); if (z === '-') setZoom(zoom / 1.25); if (z === 'fit') setZoom(1);
+  };
+  box.addEventListener('wheel', (e) => { if (!e.ctrlKey) return; e.preventDefault(); const r = box.getBoundingClientRect(); setZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), { x: e.clientX - r.left, y: e.clientY - r.top }); }, { passive: false });
+  // two-finger pinch
+  let pinch = null;
+  const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  box.addEventListener('touchstart', (e) => { if (e.touches.length === 2) { const r = box.getBoundingClientRect(); pinch = { d: dist(e.touches), z: zoom, x: (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top }; } }, { passive: true });
+  box.addEventListener('touchmove', (e) => { if (pinch && e.touches.length === 2) { e.preventDefault(); setZoom(pinch.z * (dist(e.touches) / pinch.d), pinch); } }, { passive: false });
+  box.addEventListener('touchend', () => { pinch = null; });
+  window.addEventListener('resize', () => { if (!closed) layout(); });
+
+  (async () => {
+    try {
+      const lib = await loadPdfJs();
+      const res = await fetch(url, { headers: { 'X-FC-CSRF': '1' } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Couldn’t load the PDF (${res.status})`);
+      doc = await lib.getDocument({ data: new Uint8Array(await res.arrayBuffer()) }).promise;
+      if (closed) return;
+      stack.innerHTML = '';
+      for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i), base = page.getViewport({ scale: 1 });
+        const canvas = document.createElement('canvas');
+        canvas.className = 'pdf-page'; canvas.setAttribute('aria-label', `Page ${i} of ${doc.numPages}`);
+        stack.appendChild(canvas);
+        pages.push({ page, base, ratio: base.height / base.width, canvas, scale: 0 });
+      }
+      layout();
+    } catch (err) {
+      // fall back to the browser's own viewer
+      stack.innerHTML = `<div class="alert alert-warn">The preview couldn’t be drawn here (${esc(err.message)}). Use <b>Open</b> or <b>Download</b>.</div><iframe src="${esc(url)}" title="${esc(title)}"></iframe>`;
+    }
+  })();
 }
 
 // ── router ───────────────────────────────────────────────
