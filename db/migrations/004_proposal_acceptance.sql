@@ -10,6 +10,6 @@ update proposals p set data = jsonb_set(p.data, '{sections}', (
 
 To accept, sign and return this proposal, or reply to the email it came with. A service agreement will follow for signature.')
       then jsonb_set(s, '{body}', to_jsonb((select body from content_blocks where doc_type = 'proposal' and key = 'acceptance'))) else s end order by ord)
-    from jsonb_array_elements(p.data->'sections') with ordinality t(s, ord)), updated_at = now()
+    from jsonb_array_elements(p.data->'sections') with ordinality t(s, ord))), updated_at = now()
  where p.status = 'draft' and jsonb_typeof(p.data->'sections') = 'array';
 -- ROLLBACK: set the acceptance body back to the 002 text (drafts keep whichever text they now have).
