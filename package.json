@@ -5,11 +5,15 @@
   "private": true,
   "scripts": {
     "start": "node server.mjs",
-    "dev": "node server.mjs"
+    "dev": "node server.mjs",
+    "migrate": "node db/migrate.mjs",
+    "check": "for f in pricing pdf auth biz documents contracts docuseal customers; do node lib/$f.mjs || exit 1; done",
+    "test": "npm run check && node --test --test-concurrency=1 test/*.test.mjs"
   },
   "dependencies": {
     "express": "^4.19.2",
     "nodemailer": "^6.9.14",
+    "pdfkit": "^0.20.2",
     "pg": "^8.12.0"
   }
 }

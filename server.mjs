@@ -6,13 +6,48 @@ import { runDueSteps, enroll, advance, getSettings, saveSettings } from './lib/e
 import { emailConfigured, sendEmail } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
 import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, sendCustomerCancelEmail, sendReminders, PUBLIC_URL, BOOK_URL } from './lib/booking.mjs';
+import { asyncSafe, errorHandler } from './lib/biz.mjs';
+import { mountAuth, limiter, requireRole } from './lib/auth.mjs';
+import { customerRoutes } from './lib/customers.mjs';
+import { taskRoutes } from './lib/tasks.mjs';
+import { proposalRoutes } from './lib/proposals.mjs';
+import { contractRoutes } from './lib/contracts.mjs';
+import { documentRoutes } from './lib/documents.mjs';
+import { docusealRoutes, docusealWebhook, reconcileSignatures } from './lib/docuseal.mjs';
+import { automationRoutes, runAutomation, scanSchedules } from './lib/automation.mjs';
+import { reportRoutes } from './lib/reports.mjs';
+import { libraryRoutes } from './lib/library.mjs';
+import { storageConfigured } from './lib/storage.mjs';
 
-const { DATABASE_URL, CRM_USER = 'fc', CRM_PASS, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
+const { DATABASE_URL, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
 
-const pool = new pg.Pool({ connectionString: DATABASE_URL });
+const pool = new pg.Pool({ connectionString: DATABASE_URL, max: 10, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 10_000 });
+pool.on('error', (err) => console.error('[pg] idle client error:', err.message));
 const app = express();
-app.use(express.json());
+asyncSafe(app);             // async route errors reach errorHandler instead of crashing the process
+app.disable('x-powered-by');
+app.set('trust proxy', 'loopback'); // cloudflared on this box sets X-Forwarded-For / -Proto
+
+// security headers on every response
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN',
+    'Referrer-Policy': 'same-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    'Strict-Transport-Security': 'max-age=31536000',
+    'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; frame-src 'self'; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'",
+  });
+  next();
+});
+
+// DocuSeal webhook needs the raw body for its HMAC, so it is registered before express.json()
+docusealWebhook(app, pool);
+app.use(express.json({ limit: '2mb' }));
+app.get('/healthz', async (req, res) => {
+  try { await pool.query('select 1'); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); }
+});
 
 // ── public: customer booking page + phone calendar feed ─────────────────────
 // Registered before the Basic-auth gate on purpose: customers book without a
@@ -30,7 +65,7 @@ app.use((req, res, next) => {
 });
 app.get(['/book', '/book/manage/:token'], sendBookPage);
 
-app.get('/api/public/slots', async (req, res) => {
+app.get('/api/public/slots', limiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
   const cfg = await getBooking(pool);
   let contact = null, appt = null;
   if (req.query.c) {
@@ -51,7 +86,7 @@ app.get('/api/public/slots', async (req, res) => {
   });
 });
 
-app.post('/api/public/book', async (req, res) => {
+app.post('/api/public/book', limiter({ windowMs: 60 * 60_000, max: 10, message: 'Too many bookings from here — please call us instead.' }), async (req, res) => {
   const b = req.body || {};
   const clean = (v, n = 200) => String(v ?? '').trim().slice(0, n);
   const f = { contact_name: clean(b.name), business: clean(b.business), email: clean(b.email).toLowerCase(), phone: clean(b.phone, 40), address: clean(b.address, 300), notes: clean(b.notes, 1000) };
@@ -107,6 +142,7 @@ app.post('/api/public/book', async (req, res) => {
     client.release();
   }
   sendBookingEmails({ contact, appt, rescheduled: !!old }); // fire-and-forget; never blocks the booking
+  runAutomation(pool, 'visit_booked', { appointment_id: appt.id }).catch((e) => console.error('[automation]', e));
   res.status(201).json({ token: appt.token, starts_at: appt.starts_at, ends_at: appt.ends_at });
 });
 
@@ -118,7 +154,7 @@ app.get('/api/public/appointment/:token', async (req, res) => {
   res.json(a);
 });
 
-app.post('/api/public/appointment/:token/cancel', async (req, res) => {
+app.post('/api/public/appointment/:token/cancel', limiter({ windowMs: 60 * 60_000, max: 20 }), async (req, res) => {
   const { rows: [a] } = await pool.query(`update appointments set status = 'cancelled' where token = $1 and status = 'scheduled' returning *`, [req.params.token]);
   if (!a) return res.status(404).json({ error: 'Booking not found or already cancelled' });
   const { rows: [c] } = await pool.query(`select * from contacts where id = $1`, [a.contact_id]);
@@ -136,94 +172,28 @@ app.get('/cal/:secret.ics', async (req, res) => {
   res.type('text/calendar').set('Cache-Control', 'no-cache').send(buildIcs(rows, cfg.visit_minutes));
 });
 
-// HTTP Basic auth (same pattern as fc-outreach /ops) — skipped entirely if no
-// CRM_PASS is set, so local dev works without fuss.
-//
-// Brute-force guard (this is public via Tailscale Funnel, where every request
-// arrives from the local proxy, so no per-IP limits apply): a login header
-// that already passed is let through at once; any other one is checked at
-// most once per second across all clients, so guessing is capped at ~1
-// try/s without ever locking the owner out. Ported verbatim from
-// fc-outreach's homeserver/app-server.mjs (commit 272316c).
-if (CRM_PASS) {
-  const CHECK_EVERY_MS = 1000;
-  const knownGood = new Set();
-  let nextCheckAt = 0;
+// logo (used by emails and the login page) and the login page are public
+app.get(/^\/fc-logo(-white)?\.(png|webp)$/, (req, res) => res.sendFile(req.path.slice(1), { root: 'public', maxAge: '1d' }));
+app.get('/login', (req, res) => res.set('Cache-Control', 'no-cache').sendFile('login.html', { root: 'public' }));
 
-  app.use((req, res, next) => {
-    const hdr = req.headers.authorization || '';
-    if (hdr.startsWith('Basic ') && knownGood.has(hdr)) return next();
-    const now = Date.now();
-    if (now < nextCheckAt) {
-      res.set('Retry-After', '1').set('Cache-Control', 'no-store');
-      return res.status(429).send('Too many login attempts — wait a second and try again.');
-    }
-    nextCheckAt = now + CHECK_EVERY_MS;
-    const [user, pass] = Buffer.from(hdr.replace('Basic ', ''), 'base64').toString().split(':');
-    if (user === CRM_USER && pass === CRM_PASS) {
-      if (knownGood.size > 50) knownGood.clear();
-      knownGood.add(hdr);
-      return next();
-    }
-    const from = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
-    console.warn(`[auth] wrong login from ${from}`);
-    res.set('WWW-Authenticate', 'Basic realm="fc-crm"').set('Cache-Control', 'no-store').status(401).send('Auth required');
-  });
-}
-
+// ── everything below needs a signed-in user ─────────────────────────────────
+const auth = mountAuth(app, pool);
+app.use(auth.gate);
+auth.routes();
 const STAGES = ['new', 'contacted', 'visit_booked', 'quoted', 'won', 'lost'];
 
 // booleans only — never echoes the actual credentials
-app.get('/api/health', (req, res) => res.json({ email: emailConfigured(), sms: smsConfigured() }));
+app.get('/api/health', (req, res) => res.json({ email: emailConfigured(), sms: smsConfigured(), storage: storageConfigured() }));
 
-// ── contacts ────────────────────────────────────────────
-app.get('/api/contacts', async (req, res) => {
-  const { rows } = await pool.query('select * from contacts order by updated_at desc');
-  res.json(rows);
-});
-
-app.post('/api/contacts', async (req, res) => {
-  const { business, contact_name, email, phone, address, website, source, tags, notes } = req.body;
-  const { rows } = await pool.query(
-    `insert into contacts (business, contact_name, email, phone, address, website, source, tags, notes)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
-    [business, contact_name, email, phone, address, website, source, tags || [], notes || '']
-  );
-  res.status(201).json(rows[0]);
-});
-
-app.patch('/api/contacts/:id', async (req, res) => {
-  const fields = ['business', 'contact_name', 'email', 'phone', 'address', 'website', 'source', 'tags', 'notes', 'pipeline_stage'];
-  const updates = Object.keys(req.body).filter((k) => fields.includes(k));
-  if (!updates.length) return res.status(400).json({ error: 'no valid fields' });
-  if (updates.includes('pipeline_stage') && !STAGES.includes(req.body.pipeline_stage)) {
-    return res.status(400).json({ error: `pipeline_stage must be one of ${STAGES.join(', ')}` });
-  }
-  const set = updates.map((k, i) => `${k} = $${i + 2}`).join(', ');
-  const { rows } = await pool.query(
-    `update contacts set ${set}, updated_at = now() where id = $1 returning *`,
-    [req.params.id, ...updates.map((k) => req.body[k])]
-  );
-  if (!rows[0]) return res.status(404).end();
-  if (updates.includes('pipeline_stage')) {
-    await pool.query(
-      `insert into events (contact_id, type, body) values ($1, 'stage_change', $2)`,
-      [req.params.id, req.body.pipeline_stage]
-    );
-    // auto-enrol into any campaign triggered by this stage
-    const { rows: campaigns } = await pool.query(
-      `select id from campaigns where status = 'active' and trigger_stage = $1`,
-      [req.body.pipeline_stage]
-    );
-    for (const c of campaigns) await enroll(pool, c.id, req.params.id);
-  }
-  res.json(rows[0]);
-});
-
-app.delete('/api/contacts/:id', async (req, res) => {
-  await pool.query('delete from contacts where id = $1', [req.params.id]);
-  res.status(204).end();
-});
+customerRoutes(app, pool);
+taskRoutes(app, pool);
+proposalRoutes(app, pool);
+contractRoutes(app, pool);
+documentRoutes(app, pool);
+docusealRoutes(app, pool);
+automationRoutes(app, pool);
+reportRoutes(app, pool);
+libraryRoutes(app, pool);
 
 app.get('/api/contacts/:id/events', async (req, res) => {
   const { rows } = await pool.query('select * from events where contact_id = $1 order by at desc', [req.params.id]);
@@ -249,29 +219,6 @@ app.get('/api/contacts/:id/enrollments', async (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/contacts/:id/tasks', async (req, res) => {
-  const { rows } = await pool.query('select * from tasks where contact_id = $1 order by done, due_at nulls last', [req.params.id]);
-  res.json(rows);
-});
-
-app.post('/api/contacts/:id/tasks', async (req, res) => {
-  const { title, due_at } = req.body;
-  if (!title) return res.status(400).json({ error: 'title required' });
-  const { rows } = await pool.query(
-    `insert into tasks (contact_id, title, due_at) values ($1,$2,$3) returning *`,
-    [req.params.id, title, due_at || null]
-  );
-  res.status(201).json(rows[0]);
-});
-
-app.patch('/api/tasks/:id', async (req, res) => {
-  const { rows } = await pool.query(
-    `update tasks set done = $2 where id = $1 returning *`,
-    [req.params.id, !!req.body.done]
-  );
-  res.json(rows[0]);
-});
-
 // ── campaigns (sequences) ──────────────────────────────
 app.get('/api/campaigns', async (req, res) => {
   const { rows: campaigns } = await pool.query('select * from campaigns order by created_at desc');
@@ -286,7 +233,7 @@ app.get('/api/campaigns', async (req, res) => {
   })));
 });
 
-app.post('/api/campaigns', async (req, res) => {
+app.post('/api/campaigns', requireRole('manager'), async (req, res) => {
   const { name, trigger_stage, daily_cap, steps = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'name required' });
   const client = await pool.connect();
@@ -313,7 +260,7 @@ app.post('/api/campaigns', async (req, res) => {
   }
 });
 
-app.patch('/api/campaigns/:id', async (req, res) => {
+app.patch('/api/campaigns/:id', requireRole('manager'), async (req, res) => {
   const fields = ['name', 'status', 'trigger_stage', 'daily_cap'];
   const updates = Object.keys(req.body).filter((k) => fields.includes(k));
   if (!updates.length) return res.status(400).json({ error: 'no valid fields' });
@@ -325,7 +272,7 @@ app.patch('/api/campaigns/:id', async (req, res) => {
   res.json(rows[0]);
 });
 
-app.delete('/api/campaigns/:id', async (req, res) => {
+app.delete('/api/campaigns/:id', requireRole('manager'), async (req, res) => {
   await pool.query('delete from campaigns where id = $1', [req.params.id]);
   res.status(204).end();
 });
@@ -336,29 +283,9 @@ app.post('/api/campaigns/:id/enroll', async (req, res) => {
   res.status(row ? 201 : 200).json(row || { alreadyEnrolled: true });
 });
 
-// ── appointments ────────────────────────────────────────
-app.get('/api/appointments', async (req, res) => {
-  const { rows } = await pool.query(
-    `select a.*, c.business, c.contact_name from appointments a
-     join contacts c on c.id = a.contact_id
-     where a.status != 'cancelled' order by a.starts_at asc`
-  );
-  res.json(rows);
-});
-
 app.get('/api/contacts/:id/appointments', async (req, res) => {
   const { rows } = await pool.query('select * from appointments where contact_id = $1 order by starts_at', [req.params.id]);
   res.json(rows);
-});
-
-app.post('/api/contacts/:id/appointments', async (req, res) => {
-  const { title, starts_at, ends_at, notes } = req.body;
-  if (!title || !starts_at) return res.status(400).json({ error: 'title and starts_at required' });
-  const { rows } = await pool.query(
-    `insert into appointments (contact_id, title, starts_at, ends_at, notes) values ($1,$2,$3,$4,$5) returning *`,
-    [req.params.id, title, starts_at, ends_at || null, notes || null]
-  );
-  res.status(201).json(rows[0]);
 });
 
 app.patch('/api/appointments/:id', async (req, res) => {
@@ -498,18 +425,18 @@ app.post('/api/blocks/copy-week', async (req, res) => {
 app.get('/api/booking-settings', async (req, res) => {
   res.json({ ...(await getBooking(pool)), booking_url: BOOK_URL, ics_url: `${PUBLIC_URL}/cal/${await icsSecret(pool)}.ics` });
 });
-app.put('/api/booking-settings', async (req, res) => res.json(await saveBooking(pool, req.body)));
+app.put('/api/booking-settings', requireRole('manager'), async (req, res) => res.json(await saveBooking(pool, req.body)));
 
 // ── settings + suppression ─────────────────────────────
 app.get('/api/settings', async (req, res) => res.json(await getSettings(pool)));
-app.put('/api/settings', async (req, res) => res.json(await saveSettings(pool, req.body)));
+app.put('/api/settings', requireRole('admin'), async (req, res) => res.json(await saveSettings(pool, req.body)));
 
 app.get('/api/suppression', async (req, res) => {
   const { rows } = await pool.query('select * from suppression order by created_at desc');
   res.json(rows);
 });
 
-app.post('/api/suppression', async (req, res) => {
+app.post('/api/suppression', requireRole('manager'), async (req, res) => {
   const { email, reason } = req.body;
   if (!email) return res.status(400).json({ error: 'email required' });
   const { rows } = await pool.query(
@@ -520,7 +447,7 @@ app.post('/api/suppression', async (req, res) => {
   res.status(201).json(rows[0]);
 });
 
-app.delete('/api/suppression/:email', async (req, res) => {
+app.delete('/api/suppression/:email', requireRole('manager'), async (req, res) => {
   await pool.query('delete from suppression where email = $1', [req.params.email.toLowerCase()]);
   res.status(204).end();
 });
@@ -528,12 +455,30 @@ app.delete('/api/suppression/:email', async (req, res) => {
 // Cloudflare tells browsers to cache .js/.css for 4h, so stamp them with this
 // process's start time: every deploy (restart) makes browsers fetch fresh copies.
 const VERSION = Date.now();
-const indexHtml = (await readFile('public/index.html', 'utf8')).replace(/(app\.js|style\.css)"/g, `$1?v=${VERSION}"`);
+const indexHtml = (await readFile('public/index.html', 'utf8')).replace(/(\w+\.(?:js|css))"/g, `$1?v=${VERSION}"`);
 app.get(['/', '/index.html'], (req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml));
 app.use(express.static('public'));
 
-app.listen(PORT, () => console.log(`fc-crm listening on :${PORT}`));
+app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
+app.use(errorHandler);
 
-setInterval(() => runDueSteps(pool).catch((err) => console.error('engine tick failed:', err)), Number(ENGINE_TICK_MS));
-runDueSteps(pool).catch((err) => console.error('engine tick failed:', err));
-setInterval(() => sendReminders(pool).catch((err) => console.error('reminders failed:', err)), 15 * 60_000);
+const server = app.listen(PORT, () => console.log(`fc-crm listening on :${PORT}`));
+server.requestTimeout = 120_000;
+
+// background jobs; a failing job is logged and retried on the next tick
+const every = (ms, name, fn) => { const run = () => fn().catch((err) => console.error(`${name} failed:`, err)); run(); return setInterval(run, ms); };
+const timers = [
+  every(Number(ENGINE_TICK_MS), 'engine tick', () => runDueSteps(pool)),
+  setInterval(() => sendReminders(pool).catch((err) => console.error('reminders failed:', err)), 15 * 60_000),
+  every(60 * 60_000, 'schedule scan', () => scanSchedules(pool)),
+  every(30 * 60_000, 'signature reconcile', () => reconcileSignatures(pool)),
+];
+
+// graceful shutdown: finish in-flight requests, then close the pool
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
+  console.log(`${sig}: shutting down`);
+  timers.forEach(clearInterval);
+  server.close(() => pool.end().finally(() => process.exit(0)));
+  setTimeout(() => process.exit(0), 10_000).unref();
+});
+process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
