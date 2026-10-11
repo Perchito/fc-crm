@@ -496,7 +496,7 @@ function newVisit(c) {
 const TASK_VIEWS = [['mine', 'My tasks'], ['open', 'All open'], ['overdue', 'Overdue'], ['today', 'Today'], ['upcoming', 'Upcoming'], ['done', 'Done'], ['visits', 'Visits']];
 async function renderTasks(el, view = 'mine') {
   if (!TASK_VIEWS.some(([k]) => k === view)) view = 'mine';
-  const kind = new URLSearchParams(location.hash.split('?')[1] || '').get('kind') || '';
+  const kind = ['follow_up', 'onboarding', 'quality', 'renewal', 'task', 'internal'].find((k) => k === new URLSearchParams(location.hash.split('?')[1] || '').get('kind')) || '';
   el.innerHTML = `<div class="page-head"><div><h1>Tasks</h1><p>Follow-ups, onboarding checklists, quality checks and renewals — yours and the team’s.</p></div>
     <div class="actions"><button class="btn-primary" id="t-new">+ New task</button></div></div>
     <div class="tabbar" role="tablist">${TASK_VIEWS.map(([k, l]) => `<a href="#/tasks/${k}" role="tab" aria-selected="${k === view}" class="${k === view ? 'on' : ''}">${l}</a>`).join('')}</div>
@@ -607,13 +607,14 @@ async function renderDocuments(el) {
 // ══════════════════════════════════════════════════════════
 async function renderReports(el) {
   const p = new URLSearchParams(location.hash.split('?')[1] || '');
-  const from = p.get('from') || isoDay(Date.now() - 90 * 86400000), to = p.get('to') || isoDay();
-  const r = await api(`/api/reports?from=${from}&to=${to}`);
+  const okDate = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(x || '') ? x : null); // values come from the URL: validate before use
+  const from = okDate(p.get('from')) || isoDay(Date.now() - 90 * 86400000), to = okDate(p.get('to')) || isoDay();
+  const r = await api(`/api/reports?${new URLSearchParams({ from, to })}`);
   const m = r.metrics, d = r.definitions;
   const totalStage = Object.values(m.stages).reduce((a, b) => a + b, 0) || 1;
   const metric = (title, value, key, sub = '') => `<div class="kpi"><div class="lbl">${title}</div><div class="val">${value}</div><div class="sub">${esc(d[key] || '')}${sub ? ` ${sub}` : ''}</div></div>`;
   el.innerHTML = `<div class="page-head"><div><h1>Reports</h1><p>Measured from the live database. Every figure says exactly what it counts.</p></div>
-    <form class="actions" id="r-form"><label class="sr-only" for="r-from">From</label><input type="date" id="r-from" value="${from}"><label class="sr-only" for="r-to">To</label><input type="date" id="r-to" value="${to}"><button class="btn-primary">Apply</button>${can('manager') ? `<a class="btn-secondary" href="/api/reports.csv?from=${from}&to=${to}">Export CSV</a>` : ''}</form></div>
+    <form class="actions" id="r-form"><label class="sr-only" for="r-from">From</label><input type="date" id="r-from" value="${esc(from)}"><label class="sr-only" for="r-to">To</label><input type="date" id="r-to" value="${esc(to)}"><button class="btn-primary">Apply</button>${can('manager') ? `<a class="btn-secondary" href="/api/reports.csv?${esc(new URLSearchParams({ from, to }).toString())}">Export CSV</a>` : ''}</form></div>
     <h2 style="font-size:15px;margin:0 0 10px">Sales (${fmtDate(from)} – ${fmtDate(to)})</h2>
     <div class="kpis">
       ${metric('Leads created', m.leads_created, 'leads_created')}
