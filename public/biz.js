@@ -125,7 +125,7 @@ async function route() {
   const [, name = 'dashboard', id, sub] = location.hash.match(/^#\/([\w-]+)(?:\/([\w-]+))?(?:\/([\w-]+))?/) || [];
   const v = VIEWS[name] ? name : 'dashboard';
   const conf = VIEWS[v];
-  for (const el of document.querySelectorAll('main .view')) el.classList.add('hidden');
+  for (const el of document.querySelectorAll('main .view')) { el.classList.add('hidden'); el.classList.remove('has-mbar'); }
   document.querySelectorAll('#tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === v));
   document.querySelectorAll('#tabs .tab').forEach((t) => (t.dataset.view === v ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current')));
   closeSidebar();
@@ -731,6 +731,8 @@ function showPricing(root, priced, err) {
       : `${p.per_visit != null ? `Per visit <b>${money(p.per_visit)}</b> · ` : ''}${p.weekly != null ? `Weekly <b>${money(p.weekly)}</b> · ` : ''}Monthly <b>${money(p.monthly)}</b> · Annual <b>${money(p.annual)}</b> ex VAT${p.discount ? ` (after ${money(p.discount)}/mo discount)` : ''}`;
   }
   const t = priced.totals, vat = `${(t.vat_rate_bp / 100).toLocaleString('en-GB')}%`;
+  const mt = root.querySelector('[data-mtotal]');
+  if (mt) mt.innerHTML = `<b>${t.monthly_net ? `${money(t.monthly_net)}/mo` : money(t.one_off_net)}</b>${t.monthly_net && t.one_off_net ? `+ ${money(t.one_off_net)} one-off · ` : ''}ex VAT`;
   tot.innerHTML = `<table class="totals"><tbody>
     <tr><td>Recurring / month</td><td>${money(t.monthly_net)}</td></tr><tr><td class="muted">VAT ${vat}</td><td class="muted">${money(t.monthly_vat)}</td></tr><tr class="strong"><td>Per month inc VAT</td><td>${money(t.monthly_gross)}</td></tr>
     <tr class="gap"><td>One-off</td><td>${money(t.one_off_net)}</td></tr><tr><td class="muted">VAT ${vat}</td><td class="muted">${money(t.one_off_vat)}</td></tr><tr class="strong"><td>One-off inc VAT</td><td>${money(t.one_off_gross)}</td></tr>
@@ -867,7 +869,8 @@ async function renderProposal(el, id) {
       <div class="card" id="e-problems-card"><h2>Ready to issue?</h2><div id="e-problems"></div></div>
       <div class="card"><h2>Versions</h2>${p.versions.length ? p.versions.map((v) => `<div class="list-row"><span>v${v.version}<span class="sub muted">${fmtDT(v.issued_at)}${v.issued_by_name ? ` · ${esc(v.issued_by_name)}` : ''}</span></span><span><button class="btn-ghost btn-sm" data-pdf="${v.version}">View</button><a class="btn-ghost btn-sm" href="/api/proposals/${p.id}/pdf?version=${v.version}&download=1">PDF</a></span></div>`).join('') : '<p class="muted small" style="margin:0">Nothing issued yet. A version is frozen (with its PDF) when it’s sent.</p>'}</div>
       ${p.contract ? `<div class="card"><h2>Contract</h2><a href="#/contracts/${p.contract.id}">${esc(p.contract.number)}</a> ${badge(p.contract.status)}</div>` : ''}
-    </div></div>`;
+    </div></div><div class="mbar"><div class="mtot" data-mtotal>Totals</div>${ro ? '<button class="btn-secondary" data-mbar="preview">View PDF</button>' : '<button class="btn-secondary" data-mbar="preview">Preview</button><button class="btn-primary" data-mbar="save">Save</button>'}</div>`;
+  el.classList.add('has-mbar');
 
   const root = el;
   const problems = (list) => { root.querySelector('#e-problems').innerHTML = list.length ? `<ul class="small" style="margin:0;padding-left:18px">${list.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '<p class="small" style="margin:0;color:var(--ok)">✓ Everything needed is filled in.</p>'; };
@@ -962,6 +965,7 @@ async function renderProposal(el, id) {
     if (act === 'duplicate') return busy(b, async () => { const d = await api(`/api/proposals/${p.id}/duplicate`, { method: 'POST' }); toast(`Copied to ${d.number}`); location.hash = `#/proposals/${d.id}`; });
     if (act === 'archive') return busy(b, async () => { await api(`/api/proposals/${p.id}/archive`, { method: 'POST', body: JSON.stringify({ archived: !p.archived_at }) }); toast(p.archived_at ? 'Unarchived' : 'Archived'); reload(); });
   });
+  root.querySelector('.mbar')?.addEventListener('click', (e) => { const a = e.target.dataset.mbar; if (a) A.querySelector(`[data-act=${a}]`)?.click(); });
   // Ctrl/Cmd+S saves
   root.onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's' && !ro) { e.preventDefault(); A.querySelector('[data-act=save]').click(); } };
 }
@@ -1044,7 +1048,8 @@ async function renderContract(el, id) {
         ${sig?.audit_document_id ? `<div class="list-row"><span>Signing audit trail</span><span><button class="btn-ghost btn-sm" data-doc="${sig.audit_document_id}">View</button></span></div>` : ''}
         ${k.versions.map((v) => `<div class="list-row"><span>Issued v${v.version}<span class="sub muted">${fmtDT(v.issued_at)}${v.issued_by_name ? ` · ${esc(v.issued_by_name)}` : ''}</span></span><span><button class="btn-ghost btn-sm" data-ver="${v.version}">View</button></span></div>`).join('') || '<p class="small muted" style="margin:0">A version (with its PDF) is frozen when it’s sent for signature.</p>'}
         <div id="c-docs"></div></div>
-    </div></div>`;
+    </div></div><div class="mbar"><div class="mtot" data-mtotal>Totals</div>${ro ? '<button class="btn-secondary" data-mbar="preview">View PDF</button>' : '<button class="btn-secondary" data-mbar="preview">Preview</button><button class="btn-primary" data-mbar="save">Save</button>'}</div>`;
+  el.classList.add('has-mbar');
   const root = el;
   root.querySelector('#c-problems').innerHTML = k.problems.length ? `<ul class="small" style="margin:0;padding-left:18px">${k.problems.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '<p class="small" style="margin:0;color:var(--ok)">✓ Nothing missing.</p>';
   const markDirty = () => { if (ro) return; state.dirty = true; root.querySelector('#e-dirty').hidden = false; };
@@ -1103,6 +1108,7 @@ async function renderContract(el, id) {
     }
     busy(b, async () => { await save(); await api(`/api/contracts/${k.id}/status`, { method: 'POST', body: JSON.stringify(body) }); toast(`Contract: ${label(to)}`); reload(); });
   });
+  root.querySelector('.mbar')?.addEventListener('click', (e) => { const a = e.target.dataset.mbar; if (a) A.querySelector(`[data-act=${a}]`)?.click(); });
   // signing panel actions
   root.querySelector('#sign-panel')?.addEventListener('click', async (e) => {
     const b = e.target.closest('button[data-sign]');
