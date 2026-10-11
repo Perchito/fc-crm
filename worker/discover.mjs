@@ -28,17 +28,14 @@
 //
 // Requires: `claude` CLI installed and logged in (`claude login`) as this user.
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import pg from 'pg';
 import { ensureSignature, withSignature } from '../lib/signature.mjs';
 import { subjectFor, bodyFor, FOLLOW_UP } from '../lib/leadTemplate.mjs';
-import { draftEmailAI } from '../lib/aiDraft.mjs';
+import { draftEmailAI, claude } from '../lib/aiDraft.mjs';
 import { checkEmail } from '../lib/emailCheck.mjs';
 import { BOOK_URL } from '../lib/booking.mjs';
 
-const run = promisify(execFile);
 const { DATABASE_URL } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
 
@@ -46,7 +43,11 @@ const BOROUGHS = ['Manchester', 'Salford', 'Trafford', 'Stockport', 'Tameside', 
 const day = Math.floor(Date.now() / 86_400_000);
 const BOROUGH = process.env.DISCOVER_AREA || BOROUGHS[day % BOROUGHS.length];
 const TARGET = Number(process.env.DISCOVER_TARGET || 20);
-const BATCH = 10;
+// Small batches on Sonnet with a turn cap: a 10-venue Opus batch ran 150-250
+// turns with every fetched page re-read each turn (10-25M cached tokens a
+// batch) and emptied the 5-hour usage window after ~10 leads (2026-10-09).
+const BATCH = 5;
+const DISCOVER_MODEL = process.env.DISCOVER_MODEL || 'sonnet';
 const DEADLINE_HOUR = Number(process.env.DISCOVER_DEADLINE_HOUR || 7);
 const MAX_EMPTY = 3; // consecutive batches with no new leads = the area's dried up
 
@@ -68,6 +69,10 @@ ${skip.length ? `\nWe already have these — do NOT return any of them:\n${skip.
 For each kept venue, search the web and only include ones where you find a real published
 contact email (a mailto: link or an address shown on a Contact/About page) — never invent one.
 
+Be economical: about 25 searches/fetches in total. Fetch only a venue's own Contact/About page,
+not menus or galleries. If a venue has no email after one or two looks, drop it and move on.
+Returning fewer than ${BATCH} is fine.
+
 "type" is a few words (e.g. "Italian restaurant", "Real-ale pub", "Independent café"). "about" is
 2-4 short factual sentences a cleaning company would want before calling: what the place is, who
 owns/runs it if published, rough size (covers/rooms/floors), opening hours or busiest times, and
@@ -83,7 +88,7 @@ function extractJson(text) {
 }
 
 async function findLeads(skip) {
-  const { stdout } = await run('claude', ['-p', promptFor(skip), '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch'], {
+  const { stdout } = await claude(['-p', promptFor(skip), '--model', DISCOVER_MODEL, '--max-turns', '40'], {
     timeout: 10 * 60_000,
     maxBuffer: 8 * 1024 * 1024,
   });
@@ -135,14 +140,14 @@ async function rejectIfUndeliverable(pool, email, contactId = null) {
 }
 
 async function profileFor(c) {
-  const { stdout } = await run('claude', ['-p', `Look up this UK hospitality business on its website and the web:
+  const { stdout } = await claude(['-p', `Look up this UK hospitality business on its website and the web:
 ${c.business}${c.website ? ` — ${c.website}` : ''}${c.address ? ` — ${c.address}` : ''}
 
 Return ONLY JSON {"type":"","about":""}. "type" is a few words (e.g. "Italian restaurant").
 "about" is 2-4 short factual sentences a cleaning company would want before calling: what the place
 is, who owns/runs it if published, rough size, opening hours or busiest times, and anything like
 events, a function room or a big kitchen. Only facts you actually found.`,
-    '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch'], { timeout: 8 * 60_000, maxBuffer: 4 << 20 });
+    '--model', DISCOVER_MODEL, '--max-turns', '10'], { timeout: 8 * 60_000, maxBuffer: 4 << 20 });
   let text = stdout;
   try { text = JSON.parse(stdout).result ?? stdout; } catch { /* raw text */ }
   const o = JSON.parse(String(text).match(/\{[\s\S]*\}/)[0]);
@@ -196,8 +201,9 @@ async function main() {
     try {
       leads = await findLeads(known.map((r) => r.business));
     } catch (err) {
+      if (/error_max_turns/.test(err.stdout)) { console.error('discover batch hit the turn cap, next batch'); empty++; continue; }
       // most likely the Claude usage limit — wait for it to reset rather than giving up the night
-      console.error('discover batch failed, retrying in 20 min:', (err.stderr || err.message || String(err)).slice(0, 300));
+      console.error('discover batch failed, retrying in 20 min:', (err.stdout || err.stderr || err.message || String(err)).slice(0, 300));
       await sleep(20 * 60_000);
       continue;
     }
