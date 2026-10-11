@@ -74,7 +74,8 @@ main { flex: 1; padding: 28px 32px 48px; min-width: 0; outline: none; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .page-head h1 { font-size: 24px; font-weight: 700; }
 .page-head p { color: var(--muted); margin: 4px 0 0; font-size: 14px; max-width: 70ch; }
-.page-head > p { flex-basis: 100%; margin-top: -12px; }
+.page-head > p { flex-basis: 100%; max-width: none; margin-top: -12px; }
+.sub { display: block; }
 .page-head .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .mobile-bar { display: none; }
 
