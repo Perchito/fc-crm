@@ -11,13 +11,22 @@ const STAGE_LABEL = Object.fromEntries(STAGES);
 let contacts = [];
 let BOOK_URL = 'https://book.fccleaningcompany.com'; // customer booking page (personal link adds ?c=<token>); real value from the server below
 
-async function api(path, opts) {
+// every call carries the CSRF header; an expired session goes back to the sign-in page;
+// errors carry the server's readable message (and .data, e.g. a list of problems)
+async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...(opts && opts.headers) },
+    headers: { 'Content-Type': 'application/json', 'X-FC-CSRF': '1', ...(opts && opts.headers) },
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.status === 204 ? null : res.json();
+  if (res.status === 401) { location.href = '/login'; throw new Error('Signed out'); }
+  if (!res.ok) {
+    const text = await res.text();
+    let data = {};
+    try { data = JSON.parse(text); } catch { data = { error: text }; }
+    throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status, data });
+  }
+  if (res.status === 204) return null;
+  return (res.headers.get('content-type') || '').includes('json') ? res.json() : res.text();
 }
 
 function escapeHtml(s) {
@@ -26,94 +35,84 @@ function escapeHtml(s) {
 function pill(stage) { return `<span class="pill pill-${stage}">${escapeHtml(STAGE_LABEL[stage] || stage)}</span>`; }
 
 async function loadContacts() {
-  contacts = await api('/api/contacts');
+  contacts = await api('/api/pipeline');
   renderBoard();
-  renderProspects();
 }
 
 // ── pipeline (kanban) ────────────────────────────────────
+const daysSince = (d) => Math.max(0, Math.floor((Date.now() - new Date(d)) / 86400000));
+function pipeFiltered() {
+  const q = (document.getElementById('pipe-search')?.value || '').toLowerCase();
+  const owner = document.getElementById('pipe-owner')?.value, source = document.getElementById('pipe-source')?.value;
+  return contacts.filter((c) => (!owner || c.owner_id === owner) && (!source || (c.source || '') === source)
+    && (!q || [c.business, c.contact_name, c.email, c.source].some((v) => (v || '').toLowerCase().includes(q))));
+}
 function renderBoard() {
   const board = document.getElementById('board');
   if (!board) return;
+  const list = pipeFiltered();
+  // filter options from the data
+  const srcSel = document.getElementById('pipe-source'), ownSel = document.getElementById('pipe-owner');
+  const keep = (sel, opts) => { const v = sel.value; sel.innerHTML = sel.options[0].outerHTML + opts.map(([val, label]) => `<option value="${escapeHtml(val)}">${escapeHtml(label)}</option>`).join(''); sel.value = v; };
+  keep(srcSel, [...new Set(contacts.map((c) => c.source).filter(Boolean))].sort().map((s) => [s, s]));
+  keep(ownSel, [...new Map(contacts.filter((c) => c.owner_id).map((c) => [c.owner_id, c.owner_name])).entries()]);
+  // conversion summary: how many reached each stage or beyond (lost excluded from the chain)
+  const order = ['new', 'contacted', 'visit_booked', 'quoted', 'won'];
+  const reached = order.map((st, i) => list.filter((c) => order.indexOf(c.pipeline_stage) >= i).length);
+  document.getElementById('pipe-summary').innerHTML = order.map((st, i) => `<div class="ps-step"><b>${list.filter((c) => c.pipeline_stage === st).length}</b><span>${STAGE_LABEL[st]}</span>${i ? `<small title="Share of customers at ${STAGE_LABEL[order[i - 1]]} or beyond that reached ${STAGE_LABEL[st]} or beyond">${reached[i - 1] ? Math.round((reached[i] / reached[i - 1]) * 100) : 0}% from previous</small>` : '<small>in stage</small>'}</div>`).join('')
+    + `<div class="ps-step lost"><b>${list.filter((c) => c.pipeline_stage === 'lost').length}</b><span>Lost</span><small>in stage</small></div>`;
   board.innerHTML = '';
   for (const [stage, label] of STAGES) {
     const col = document.createElement('div');
     col.className = 'column';
     col.dataset.stage = stage;
-    const list = contacts.filter((c) => c.pipeline_stage === stage);
-    col.innerHTML = `<h2>${label} <span>${list.length}</span></h2>`;
-    for (const c of list) col.appendChild(renderCard(c));
+    const inStage = list.filter((c) => c.pipeline_stage === stage);
+    const value = inStage.reduce((a, c) => a + Number(c.quoted_monthly_pence || 0), 0);
+    col.innerHTML = `<h2><span class="col-dot dot-${stage}"></span>${label} <span>${inStage.length}</span></h2>${value ? `<div class="col-value" title="Monthly value of proposals awaiting a reply (ex VAT) — not revenue">${typeof money === 'function' ? money(value) : ''}/mo quoted</div>` : ''}`;
+    for (const c of inStage.slice(0, 200)) col.appendChild(renderCard(c));
+    if (inStage.length > 200) col.insertAdjacentHTML('beforeend', `<p class="empty">+ ${inStage.length - 200} more — use the filter above</p>`);
     col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('drag-over'); });
     col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
     col.addEventListener('drop', async (e) => {
       e.preventDefault();
       col.classList.remove('drag-over');
       const id = e.dataTransfer.getData('text/plain');
-      const contact = contacts.find((c) => c.id === id);
-      if (!contact || contact.pipeline_stage === stage) return;
-      contact.pipeline_stage = stage;
-      renderBoard();
-      await api(`/api/contacts/${id}`, { method: 'PATCH', body: JSON.stringify({ pipeline_stage: stage }) });
+      moveStage(contacts.find((c) => c.id === id), stage);
     });
     board.appendChild(col);
   }
+}
+async function moveStage(contact, stage) {
+  if (!contact || contact.pipeline_stage === stage) return;
+  const prev = contact.pipeline_stage;
+  contact.pipeline_stage = stage; contact.stage_since = new Date().toISOString();
+  renderBoard();
+  try {
+    await api(`/api/contacts/${contact.id}`, { method: 'PATCH', body: JSON.stringify({ pipeline_stage: stage }) });
+    toast(`${contact.business || 'Customer'} → ${STAGE_LABEL[stage]}`);
+  } catch (err) { contact.pipeline_stage = prev; renderBoard(); toast(err.message, 'error'); }
 }
 
 function renderCard(c) {
   const card = document.createElement('div');
   card.className = 'card kanban-card';
   card.draggable = true;
+  card.tabIndex = 0;
+  const overdue = c.next_task_due && new Date(c.next_task_due) < new Date();
   card.innerHTML = `<div class="biz">${escapeHtml(c.business || '(no name)')}</div>
     <div class="meta">${escapeHtml(c.contact_name || c.email || c.phone || '')}</div>
-    <select class="card-stage">${STAGES.map(([v, l]) => `<option value="${v}" ${v === c.pipeline_stage ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+    ${c.next_task ? `<div class="next ${overdue ? 'overdue' : ''}" title="Next task">→ ${escapeHtml(c.next_task)}${c.next_task_due ? ` · ${new Date(c.next_task_due).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : ''}</div>` : '<div class="next none">No next action</div>'}
+    <div class="card-foot"><span title="Days in this stage">${daysSince(c.stage_since)}d in stage</span>${c.source ? `<span>${escapeHtml(c.source)}</span>` : ''}</div>
+    <select class="card-stage" aria-label="Stage">${STAGES.map(([v, l]) => `<option value="${v}" ${v === c.pipeline_stage ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   card.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', c.id));
   card.addEventListener('click', () => openDrawer(c.id));
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === card) openDrawer(c.id); });
   const stageSelect = card.querySelector('.card-stage');
   stageSelect.addEventListener('click', (e) => e.stopPropagation());
-  stageSelect.addEventListener('change', async (e) => {
-    const stage = e.target.value;
-    c.pipeline_stage = stage;
-    renderBoard();
-    await api(`/api/contacts/${c.id}`, { method: 'PATCH', body: JSON.stringify({ pipeline_stage: stage }) });
-  });
+  stageSelect.addEventListener('change', (e) => moveStage(c, e.target.value));
   return card;
 }
-
-// ── prospects (table) ───────────────────────────────────
-function renderProspects() {
-  const tbody = document.getElementById('prospects-tbody');
-  if (!tbody) return;
-  const q = (document.getElementById('prospects-search').value || '').toLowerCase();
-  const stageFilter = document.getElementById('prospects-filter').value;
-  const rows = contacts.filter((c) => {
-    if (stageFilter && c.pipeline_stage !== stageFilter) return false;
-    if (!q) return true;
-    return (c.business || '').toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q) || (c.contact_name || '').toLowerCase().includes(q);
-  });
-  document.getElementById('prospects-count').textContent = `${rows.length} shown. Search or filter by pipeline stage.`;
-  tbody.innerHTML = '';
-  for (const c of rows) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${escapeHtml(c.business || '(no name)')}</td><td>${escapeHtml(c.email || '')}</td>
-      <td>${escapeHtml(c.phone || '')}</td><td>${/^https?:\/\//i.test(c.website || '') ? `<a href="${escapeHtml(c.website)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(c.website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''))}</a>` : ''}</td><td>${escapeHtml(c.address || '')}</td><td>${escapeHtml(c.source || '')}</td><td>${pill(c.pipeline_stage)}</td>`;
-    tr.addEventListener('click', () => openDrawer(c.id));
-    tbody.appendChild(tr);
-  }
-}
-
-const filterSelect = document.getElementById('prospects-filter');
-for (const [v, l] of STAGES) filterSelect.insertAdjacentHTML('beforeend', `<option value="${v}">${l}</option>`);
-document.getElementById('prospects-search').addEventListener('input', renderProspects);
-filterSelect.addEventListener('change', renderProspects);
-
-document.getElementById('new-contact-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const body = Object.fromEntries(fd.entries());
-  await api('/api/contacts', { method: 'POST', body: JSON.stringify(body) });
-  e.target.reset();
-  loadContacts();
-});
+for (const id of ['pipe-search', 'pipe-owner', 'pipe-source']) document.getElementById(id)?.addEventListener('input', renderBoard);
 
 // ── draft editor (drawer + Drafts page) ─────────────────
 function draftBox(d, after) {
@@ -137,11 +136,12 @@ function draftBox(d, after) {
     try {
       await api(`/api/sends/${d.id}`, { method: 'PATCH', body: JSON.stringify({ subject, body }) });
       await api(`/api/sends/${d.id}/send`, { method: 'POST' });
-    } catch (err) { alert(`Send failed: ${err.message}`); e.target.disabled = false; return; }
+    } catch (err) { toast(`Send failed: ${err.message}`, 'error'); e.target.disabled = false; return; }
+    toast('Email sent');
     after();
   });
   box.querySelector('.d-discard').addEventListener('click', async () => {
-    if (!confirm('Discard this draft?')) return;
+    if (!(await confirmDialog({ title: 'Discard this draft?', body: 'The email won’t be sent and the sequence stops for this lead.', confirmText: 'Discard', danger: true }))) return;
     await api(`/api/sends/${d.id}/discard`, { method: 'POST' });
     after();
   });
@@ -337,7 +337,7 @@ document.getElementById('ce-form').addEventListener('submit', async (e) => {
       return openDrawer(ceItem.contact_id);
     }
     if (action === 'delete') {
-      if (!confirm(appt ? `Cancel this visit?${notify ? ' The customer will be emailed.' : ''}` : 'Delete this shift?')) return;
+      if (!(await confirmDialog({ title: appt ? 'Cancel this visit?' : 'Delete this shift?', body: appt && notify ? 'The customer will be emailed.' : '', confirmText: appt ? 'Cancel visit' : 'Delete', danger: true }))) return;
       if (appt) await api(`/api/appointments/${ceItem.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled', notify }) });
       else await api(`/api/blocks/${ceItem.id}`, { method: 'DELETE' });
     } else {
@@ -359,7 +359,7 @@ document.getElementById('cal-next').addEventListener('click', () => { calWeek = 
 document.getElementById('cal-today').addEventListener('click', () => { calWeek = startOfWeek(new Date()); calDay = (new Date().getDay() + 6) % 7; loadCalendarView(true); });
 document.getElementById('cal-copy').addEventListener('click', async () => {
   const r = await api('/api/blocks/copy-week', { method: 'POST', body: JSON.stringify({ from: addDays(calWeek, -7).toISOString(), to: calWeek.toISOString() }) });
-  if (!r.copied) alert('Last week has no shifts to copy.');
+  toast(r.copied ? `Copied ${r.copied} shift${r.copied === 1 ? '' : 's'}` : 'Last week has no shifts to copy.', r.copied ? 'ok' : 'warn');
   loadCalendarView();
 });
 document.getElementById('cal-settings').addEventListener('submit', async (e) => {
@@ -384,7 +384,7 @@ document.addEventListener('click', async (e) => {
 async function openDrawer(id) {
   const drawer = document.getElementById('drawer');
   const backdrop = document.getElementById('drawer-backdrop');
-  const c = contacts.find((x) => x.id === id);
+  const c = contacts.find((x) => x.id === id) || await api(`/api/contacts/${id}/profile`);
   const [events, tasks, appts, drafts, enrollments] = await Promise.all([
     api(`/api/contacts/${id}/events`),
     api(`/api/contacts/${id}/tasks`),
@@ -400,8 +400,9 @@ async function openDrawer(id) {
   };
 
   drawer.innerHTML = `
-    <button class="close-btn" id="drawer-close">✕</button>
+    <button class="close-btn" id="drawer-close" aria-label="Close">✕</button>
     <h2>${escapeHtml(c.business || '(no name)')}</h2>
+    <a class="btn btn-secondary btn-sm" href="#/customers/${c.id}" id="drawer-profile">Open full profile →</a>
     <div class="field"><label>About the business</label><textarea id="f-notes" rows="5" placeholder="What the place is, owner, size, busy times...">${escapeHtml(c.notes || '')}</textarea></div>
     ${enrollments.length ? `<div class="field"><label>Campaign</label>${enrollments.map(enrollmentLine).join('')}</div>` : ''}
     <div class="field"><label>Stage</label>
@@ -416,7 +417,7 @@ async function openDrawer(id) {
     <div class="field"><label>Booking link <span class="dim">(send this so they can pick a visit time)</span></label>
       <div class="copy-row"><input id="f-booklink" readonly value="${escapeHtml(`${BOOK_URL}?c=${c.booking_token}`)}" /><button class="btn-secondary" data-copy="f-booklink">Copy</button></div></div>
     <div style="margin-top:10px;display:flex;gap:8px"><button class="btn-primary" id="save-btn">Save</button>
-      <button class="btn-secondary" id="delete-btn">Delete</button></div>
+      <button class="btn-secondary" id="delete-btn">Archive</button></div>
 
     <div id="drafts-section"></div>
 
@@ -483,6 +484,7 @@ async function openDrawer(id) {
   }
 
   drawer.querySelector('#drawer-close').addEventListener('click', closeDrawer);
+  drawer.querySelector('#drawer-profile').addEventListener('click', closeDrawer);
   drawer.querySelector('#save-btn').addEventListener('click', async () => {
     const patch = {
       pipeline_stage: drawer.querySelector('#f-stage').value,
@@ -494,13 +496,15 @@ async function openDrawer(id) {
       notes: drawer.querySelector('#f-notes').value,
       source: drawer.querySelector('#f-source').value,
     };
-    await api(`/api/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+    try { await api(`/api/contacts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }); } catch (err) { return toast(err.message, 'error'); }
+    toast('Saved');
     closeDrawer();
     loadContacts();
   });
   drawer.querySelector('#delete-btn').addEventListener('click', async () => {
-    if (!confirm('Delete this contact?')) return;
+    if (!(await confirmDialog({ title: 'Archive this customer?', body: 'They disappear from lists and sequences stop. Proposals, contracts and documents are kept, and you can restore them from Customers → Archived.', confirmText: 'Archive', danger: true }))) return;
     await api(`/api/contacts/${id}`, { method: 'DELETE' });
+    toast('Customer archived');
     closeDrawer();
     loadContacts();
   });
@@ -525,27 +529,16 @@ async function openDrawer(id) {
 
   drawer.classList.remove('hidden');
   backdrop.classList.remove('hidden');
+  drawer.setAttribute('role', 'dialog'); drawer.setAttribute('aria-label', c.business || 'Customer');
+  drawer.querySelector('#drawer-close').focus();
 }
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.getElementById('drawer').classList.contains('hidden')) closeDrawer(); });
 
 function closeDrawer() {
   document.getElementById('drawer').classList.add('hidden');
   document.getElementById('drawer-backdrop').classList.add('hidden');
 }
 document.getElementById('drawer-backdrop').addEventListener('click', closeDrawer);
-
-// ── tabs ─────────────────────────────────────────────────
-const loaders = { dashboard: loadDashboard, drafts: loadDraftsView, calendar: () => loadCalendarView(true), campaigns: loadCampaignsView, settings: loadSettingsView };
-for (const btn of document.querySelectorAll('#tabs .tab')) {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#tabs .tab').forEach((b) => b.classList.remove('active'));
-    btn.classList.add('active');
-    for (const el of document.querySelectorAll('main .view')) el.classList.add('hidden');
-    document.getElementById(`view-${btn.dataset.view}`).classList.remove('hidden');
-    const loader = loaders[btn.dataset.view];
-    if (loader) loader();
-    closeSidebar();
-  });
-}
 
 // ── mobile sidebar ──────────────────────────────────────
 function openSidebar() {
@@ -558,37 +551,6 @@ function closeSidebar() {
 }
 document.getElementById('menu-toggle').addEventListener('click', openSidebar);
 document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
-
-// ── dashboard ────────────────────────────────────────────
-async function loadDashboard() {
-  if (!contacts.length) await loadContacts();
-  const counts = Object.fromEntries(STAGES.map(([v]) => [v, contacts.filter((c) => c.pipeline_stage === v).length]));
-  const cards = document.getElementById('stat-cards');
-  cards.innerHTML = `<div class="stat-card"><div class="n">${contacts.length}</div><div class="label">Total prospects</div></div>` +
-    STAGES.map(([v, l]) => `<div class="stat-card"><div class="n">${counts[v]}</div><div class="label">${l}</div></div>`).join('');
-
-  const [appts, activity, drafts] = await Promise.all([api('/api/appointments'), api('/api/activity'), api('/api/drafts')]);
-
-  document.getElementById('drafts-count').textContent = `Drafts awaiting review (${drafts.length})`;
-  const draftsTbody = document.getElementById('drafts-tbody');
-  draftsTbody.innerHTML = drafts.length ? '' : '<tr><td colspan="3" class="empty">Nothing waiting — new AI-discovered leads get drafted automatically.</td></tr>';
-  for (const d of drafts) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${escapeHtml(d.business || '')}</td><td>${escapeHtml(d.subject || '')}</td><td></td>`;
-    tr.addEventListener('click', () => document.querySelector('#tabs .tab[data-view="drafts"]').click());
-    draftsTbody.appendChild(tr);
-  }
-
-  const apptsEl = document.getElementById('dash-appointments');
-  apptsEl.innerHTML = appts.length ? appts.slice(0, 8).map((a) =>
-    `<div class="list-row"><span>${escapeHtml(a.title)} — ${escapeHtml(a.business || '')}</span><span class="dim">${new Date(a.starts_at).toLocaleDateString()}</span></div>`
-  ).join('') : '<div class="empty">Nothing scheduled.</div>';
-
-  const actEl = document.getElementById('dash-activity');
-  actEl.innerHTML = activity.length ? activity.map((ev) =>
-    `<div class="list-row"><span>${escapeHtml(ev.business || '')} — ${ev.type === 'stage_change' ? `stage → ${escapeHtml(ev.body)}` : escapeHtml(ev.type)}</span><span class="dim">${new Date(ev.at).toLocaleDateString()}</span></div>`
-  ).join('') : '<div class="empty">No activity yet.</div>';
-}
 
 // ── campaigns ────────────────────────────────────────────
 async function loadCampaignsView() {
@@ -647,6 +609,7 @@ document.getElementById('new-campaign-form').addEventListener('submit', async (e
     body_tmpl: row.querySelector('.s-body').value,
   }));
   await api('/api/campaigns', { method: 'POST', body: JSON.stringify({ name: fd.get('name'), trigger_stage: fd.get('trigger_stage') || null, steps }) });
+  toast('Campaign created');
   e.target.reset();
   stepsContainer.innerHTML = '';
   addStepRow(stepsContainer);
@@ -703,4 +666,3 @@ document.getElementById('suppress-form').addEventListener('submit', async (e) =>
   loadSuppression();
 });
 
-loadDashboard();

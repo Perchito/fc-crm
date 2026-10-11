@@ -3,108 +3,82 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>fc-crm</title>
+<title>FC Cleaning CRM</title>
+<link rel="icon" href="fc-logo.webp" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+<a href="#main" class="skip-link">Skip to content</a>
 <div class="mobile-bar">
-  <button id="menu-toggle" aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <button id="menu-toggle" aria-label="Open menu" aria-controls="sidebar"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
   <span class="mobile-title">FC Cleaning <b>CRM</b></span>
 </div>
 <div id="sidebar-backdrop" class="hidden"></div>
 <div class="app">
-  <aside class="sidebar" id="sidebar">
-    <div class="logo"><span>FC Cleaning</span> <b>CRM</b><div class="tagline">Self-hosted CRM ops</div></div>
+  <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+    <div class="logo"><img src="fc-logo-white.png" alt="" width="40" height="42"><div><span>FC Cleaning</span><div class="tagline">Business CRM</div></div></div>
     <nav id="tabs">
-      <button data-view="dashboard" class="tab active">
-        <svg viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5M6 10v9h5v-5h2v5h5v-9"/></svg>
-        Dashboard
-      </button>
-      <button data-view="drafts" class="tab">
-        <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="m4 6 8 7 8-7"/></svg>
-        Drafts
-      </button>
-      <button data-view="prospects" class="tab">
-        <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="8" r="2.5"/><path d="M15.5 14.2c2.5.4 4.5 2.6 4.5 5.8"/></svg>
-        Prospects
-      </button>
-      <button data-view="pipeline" class="tab">
-        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="10" rx="1"/><rect x="17" y="4" width="5" height="13" rx="1"/></svg>
-        Pipeline
-      </button>
-      <button data-view="campaigns" class="tab">
-        <svg viewBox="0 0 24 24"><path d="M3 11 20 4l-4 17-5-7-7-3Z"/></svg>
-        Campaigns
-      </button>
-      <button data-view="calendar" class="tab">
-        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
-        Calendar
-      </button>
-      <button data-view="settings" class="tab">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>
-        Settings
-      </button>
+      <div class="nav-group">Overview</div>
+      <a href="#/dashboard" data-view="dashboard" class="tab"><svg viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5M6 10v9h5v-5h2v5h5v-9"/></svg>Dashboard</a>
+      <a href="#/tasks" data-view="tasks" class="tab"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m3.5 6 1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5 2.5-2.5"/></svg>Tasks<span class="nav-count" id="nav-overdue" hidden></span></a>
+      <div class="nav-group">Sales</div>
+      <a href="#/customers" data-view="customers" class="tab"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="8" r="2.5"/><path d="M15.5 14.2c2.5.4 4.5 2.6 4.5 5.8"/></svg>Customers</a>
+      <a href="#/pipeline" data-view="pipeline" class="tab"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="10" rx="1"/><rect x="17" y="4" width="5" height="13" rx="1"/></svg>Pipeline</a>
+      <a href="#/proposals" data-view="proposals" class="tab"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>Proposals</a>
+      <a href="#/drafts" data-view="drafts" class="tab"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="m4 6 8 7 8-7"/></svg>Outreach drafts</a>
+      <a href="#/campaigns" data-view="campaigns" class="tab"><svg viewBox="0 0 24 24"><path d="M3 11 20 4l-4 17-5-7-7-3Z"/></svg>Campaigns</a>
+      <div class="nav-group">Operations</div>
+      <a href="#/contracts" data-view="contracts" class="tab"><svg viewBox="0 0 24 24"><path d="M6 3h12v18H6z"/><path d="M9 8h6M9 12h6M9 16l2 2 4-4"/></svg>Contracts</a>
+      <a href="#/documents" data-view="documents" class="tab"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>Documents</a>
+      <a href="#/calendar" data-view="calendar" class="tab"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Calendar</a>
+      <div class="nav-group">Insights</div>
+      <a href="#/reports" data-view="reports" class="tab"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Reports</a>
+      <a href="#/settings" data-view="settings" class="tab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>Settings</a>
     </nav>
+    <div class="side-user" id="side-user"></div>
   </aside>
 
-  <main>
-    <section id="view-dashboard" class="view">
-      <div class="page-head"><h1>Dashboard</h1><p>Pipeline at a glance.</p></div>
-      <div id="stat-cards" class="stat-cards"></div>
-      <div class="card table-card" id="drafts-card">
-        <h2 id="drafts-count">Drafts awaiting review</h2>
-        <table>
-          <thead><tr><th>Business</th><th>Subject</th><th></th></tr></thead>
-          <tbody id="drafts-tbody"></tbody>
-        </table>
+  <div class="main-col">
+  <header class="topbar">
+    <nav class="crumbs" id="crumbs" aria-label="Breadcrumb"></nav>
+    <div class="top-actions">
+      <div class="gsearch">
+        <input id="gsearch" type="search" placeholder="Search customers…" aria-label="Search customers" autocomplete="off" />
+        <div class="gsearch-results" id="gsearch-results" role="listbox" hidden></div>
       </div>
-      <div class="grid-2">
-        <div class="card">
-          <h2>Upcoming appointments</h2>
-          <div id="dash-appointments"></div>
+      <details class="menu new-menu"><summary class="btn btn-primary btn-sm">+ New</summary>
+        <div class="menu-list">
+          <button data-new="customer">Customer</button><button data-new="proposal">Proposal</button><button data-new="task">Task</button>
         </div>
-        <div class="card">
-          <h2>Recent activity</h2>
-          <div id="dash-activity"></div>
-        </div>
-      </div>
-    </section>
+      </details>
+    </div>
+  </header>
+<main id="main" tabindex="-1">
+    <section id="view-dashboard" class="view"></section>
+    <section id="view-customers" class="view hidden"></section>
+    <section id="view-customer" class="view hidden"></section>
+    <section id="view-proposals" class="view hidden"></section>
+    <section id="view-proposal" class="view hidden"></section>
+    <section id="view-contracts" class="view hidden"></section>
+    <section id="view-contract" class="view hidden"></section>
+    <section id="view-documents" class="view hidden"></section>
+    <section id="view-tasks" class="view hidden"></section>
+    <section id="view-reports" class="view hidden"></section>
 
     <section id="view-drafts" class="view hidden">
       <div class="page-head"><h1>Drafts</h1><p id="drafts-page-count"></p></div>
       <div id="drafts-list"></div>
     </section>
 
-    <section id="view-prospects" class="view hidden">
-      <div class="page-head"><h1>Prospects</h1><p id="prospects-count">Search or filter by pipeline stage.</p></div>
-      <div class="toolbar">
-        <input id="prospects-search" placeholder="Search name or email..." />
-        <select id="prospects-filter">
-          <option value="">All statuses</option>
-        </select>
-      </div>
-      <div class="card">
-        <h2>Add a prospect manually</h2>
-        <form id="new-contact-form" class="inline-form">
-          <input name="business" placeholder="Business" required />
-          <input name="contact_name" placeholder="Contact name" />
-          <input name="email" type="email" placeholder="Email" />
-          <input name="phone" placeholder="Phone" />
-          <input name="source" placeholder="Source" />
-          <button type="submit" class="btn-primary">+ Add</button>
-        </form>
-      </div>
-      <div class="card table-card">
-        <table>
-          <thead><tr><th>Business</th><th>Email</th><th>Phone</th><th>Website</th><th>Address</th><th>Source</th><th>Status</th></tr></thead>
-          <tbody id="prospects-tbody" class="mobile-cards"></tbody>
-        </table>
-      </div>
-    </section>
-
     <section id="view-pipeline" class="view hidden">
-      <div class="page-head"><h1>Pipeline</h1><p>Drag a card to change its stage.</p></div>
-      <div id="board"></div>
+      <div class="page-head"><h1>Pipeline</h1><p>Drag a card (or use its stage menu) to move it. Cards show the next action and how long they’ve been in the stage.</p></div>
+      <div class="toolbar">
+        <input id="pipe-search" type="search" placeholder="Filter by name, email or source…" aria-label="Filter pipeline" />
+        <select id="pipe-owner" aria-label="Owner"><option value="">Everyone</option></select>
+        <select id="pipe-source" aria-label="Source"><option value="">All sources</option></select>
+      </div>
+      <div id="pipe-summary" class="pipe-summary"></div>
+      <div class="board-wrap"><div id="board"></div></div>
     </section>
 
     <section id="view-campaigns" class="view hidden">
@@ -193,9 +167,12 @@
     </section>
 
     <section id="view-settings" class="view hidden">
-      <div class="page-head"><h1>Settings</h1><p>Automation behaviour and the suppression list.</p></div>
+      <div class="page-head"><h1>Settings</h1><p>Company details, users, document library, automations and outreach.</p></div>
+      <div class="tabbar" id="settings-tabs" role="tablist"></div>
+      <div id="settings-panel"></div>
+      <div id="settings-outreach" hidden>
       <div class="card">
-        <h2>Automation</h2>
+        <h2>Outreach sending window</h2>
         <form id="settings-form" class="settings-grid">
           <label>Send window start (HH:MM)<input name="send_window_start" /></label>
           <label>Send window end (HH:MM)<input name="send_window_end" /></label>
@@ -219,13 +196,19 @@
           <tbody id="suppression-tbody"></tbody>
         </table>
       </div>
+      </div>
     </section>
   </main>
+  </div>
 </div>
 
 <div id="drawer-backdrop" class="hidden"></div>
 <aside id="drawer" class="hidden"></aside>
 
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<dialog id="modal" class="modal"></dialog>
+
 <script src="app.js"></script>
+<script src="biz.js"></script>
 </body>
 </html>
