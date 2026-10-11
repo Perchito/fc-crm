@@ -100,7 +100,20 @@ function pickAndUpload(query, done) {
   input.click();
 }
 function previewPdf(url, title) {
-  modal({ title, wide: true, body: `<iframe src="${esc(url)}" title="${esc(title)}"></iframe><p class="small muted">The preview is the actual PDF. <a href="${esc(url)}${url.includes('?') ? '&' : '?'}download=1">Download</a> · <a href="${esc(url)}" target="_blank" rel="noopener">Open in new tab</a></p>`, noSubmit: true, cancel: 'Close' });
+  const dl = `${url}${url.includes('?') ? '&' : '?'}download=1`;
+  modalEl.className = 'modal pdf-modal';
+  modalEl.innerHTML = `<div class="pdf-bar"><b>${esc(title)}</b>
+      <a class="btn-primary btn-sm" href="${esc(dl)}">Download</a>
+      <a class="btn-secondary btn-sm" href="${esc(url)}" target="_blank" rel="noopener">Open</a>
+      <button type="button" class="pdf-close" aria-label="Close preview">✕</button></div>
+    <iframe src="${esc(url)}" title="${esc(title)}"></iframe>
+    <p class="pdf-hint">On a phone, “Open” shows every page in the PDF viewer, where you can also share or save it.</p>`;
+  modalEl.querySelector('.pdf-close').onclick = () => modalEl.close();
+  modalEl.showModal();                       // Escape closes it too (native dialog)
+  history.pushState({ pdf: 1 }, '', location.href); // phone back button closes the preview
+  const onPop = () => { if (modalEl.open) modalEl.close(); };
+  window.addEventListener('popstate', onPop, { once: true });
+  modalEl.addEventListener('close', () => { window.removeEventListener('popstate', onPop); if (history.state?.pdf) history.back(); }, { once: true });
 }
 
 // ── router ───────────────────────────────────────────────
