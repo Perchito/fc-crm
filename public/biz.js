@@ -196,6 +196,12 @@ function previewPdf(url, title) {
 }
 
 // ── native invoicing ───────────────────────────────────────
+function dueText(i) {
+  if (i.status === 'paid') return i.paid_on ? `Paid ${fmtDate(i.paid_on)}` : 'Paid';
+  if (i.status === 'draft') return `Due ${fmtDate(i.due_date)}`;
+  const d = Math.round((Date.parse(String(i.due_date).slice(0, 10)) - Date.parse(isoDay())) / 864e5);
+  return d > 0 ? `Due in ${d} day${d === 1 ? '' : 's'}: ${fmtDate(i.due_date)}` : d === 0 ? 'Due today' : `Overdue by ${-d} day${d === -1 ? '' : 's'}`;
+}
 async function renderInvoices(section) {
   if (!can('manager')) { section.innerHTML = '<div class="alert">Only managers and administrators can create invoices.</div>'; return; }
   const [invoices, customers] = await Promise.all([api('/api/invoices'), api('/api/contacts?limit=1000')]);
@@ -205,12 +211,14 @@ async function renderInvoices(section) {
   const card = (i) => `<article class="inv-card" data-q="${esc(`${i.number} ${i.business || ''}`.toLowerCase())}" data-status="${esc(i.status)}">
       <div class="inv-top"><b class="inv-no">${esc(i.number)}</b>${badge(i.status)}${overdue(i) ? '<span class="badge b-expired">Overdue</span>' : ''}</div>
       <div class="inv-cust">${esc(i.business || '—')}</div>
-      <div class="inv-meta"><span>${i.status === 'draft' ? 'Dated' : 'Issued'} ${fmtDate(i.issue_date)}</span><span>Due ${fmtDate(i.due_date)}</span></div>
+      <div class="inv-meta"><span>${i.status === 'draft' ? 'Dated' : 'Issued'} ${fmtDate(i.issue_date)}</span><span class="${overdue(i) ? 'inv-late' : ''}">${dueText(i)}</span>${i.last_reminder_at ? `<span>Reminder sent ${fmtDate(i.last_reminder_at)}</span>` : ''}</div>
       <div class="inv-money"><div><small>Total</small><b>${money(i.total_pence)}</b></div>${i.status === 'draft' ? '' : `<div><small>Balance</small><b>${money(i.balance_pence)}</b></div>`}</div>
       <div class="inv-actions">
         <button class="btn-secondary btn-sm" data-act="pdf">View PDF</button>
         ${i.status === 'draft' ? '<button class="btn-secondary btn-sm" data-act="edit">Edit</button><button class="btn-primary btn-sm" data-act="issue">Issue</button><button class="btn-ghost btn-sm inv-del" data-act="delete">Delete</button>' : ''}
-        ${['issued', 'part_paid'].includes(i.status) && Number(i.balance_pence) > 0 ? '<button class="btn-primary btn-sm" data-act="pay">Record payment</button>' : ''}
+        ${['issued', 'part_paid'].includes(i.status) && Number(i.balance_pence) > 0 ? `<button class="btn-primary btn-sm" data-act="paid">Mark paid</button><button class="btn-secondary btn-sm" data-act="pay">Part payment</button><button class="btn-secondary btn-sm" data-act="remind">Send reminder</button>
+          <label class="inv-auto"><input type="checkbox" data-act="auto" ${i.reminders ? 'checked' : ''}> Auto reminders</label>` : ''}
+        ${['paid', 'part_paid'].includes(i.status) ? '<button class="btn-ghost btn-sm" data-act="unpaid">Mark unpaid</button>' : ''}
       </div></article>`;
   const lineRow = (l = {}) => `<div class="invoice-line">
       <label class="inv-desc">Description<input name="description" required maxlength="300" value="${esc(l.description ?? 'Cleaning service')}"></label>
@@ -310,6 +318,25 @@ async function renderInvoices(section) {
       const ok = await modal({ title: `Delete ${i.number}?`, sub: 'This draft hasn’t been sent, so it can be deleted.', submit: 'Delete', danger: true,
         onSubmit: async () => { await api(`/api/invoices/${i.id}`, { method: 'DELETE' }); return true; } });
       if (ok !== null) { toast('Draft deleted'); await renderInvoices(section); }
+    }
+    if (b.dataset.act === 'auto') {
+      try { await api(`/api/invoices/${i.id}/reminders`, { method: 'PATCH', body: JSON.stringify({ enabled: b.checked }) }); toast(b.checked ? 'Automatic reminders on' : 'Automatic reminders off'); } catch (err) { b.checked = !b.checked; toast(err.message, 'error'); }
+      return;
+    }
+    if (b.dataset.act === 'paid') {
+      const ok = await modal({ title: `Mark ${i.number} as paid?`, sub: `${esc(i.business || '')} · ${money(i.balance_pence)}`, body: field('Paid on', `<input name="paid_on" type="date" value="${isoDay()}" required>`), submit: 'Mark paid',
+        onSubmit: async (_, fd) => { await api(`/api/invoices/${i.id}/payments`, { method: 'POST', body: JSON.stringify({ amount: Number(i.balance_pence) / 100, paid_on: fd.get('paid_on'), reference: '' }) }); return true; } });
+      if (ok !== null) { toast(`${i.number} marked paid`); await renderInvoices(section); }
+    }
+    if (b.dataset.act === 'unpaid') {
+      const ok = await modal({ title: `Mark ${i.number} as unpaid?`, sub: 'This removes the payments recorded against it.', submit: 'Mark unpaid', danger: true,
+        onSubmit: async () => { await api(`/api/invoices/${i.id}/unpaid`, { method: 'POST', body: '{}' }); return true; } });
+      if (ok !== null) { toast(`${i.number} is unpaid again`); await renderInvoices(section); }
+    }
+    if (b.dataset.act === 'remind') {
+      const ok = await modal({ title: `Send a reminder for ${i.number}?`, sub: `Emails the customer the invoice PDF and the ${money(i.balance_pence)} still owed.`, submit: 'Send reminder',
+        onSubmit: async () => api(`/api/invoices/${i.id}/remind`, { method: 'POST', body: '{}' }) });
+      if (ok) { toast(`Reminder sent to ${ok.to}`); await renderInvoices(section); }
     }
     if (b.dataset.act === 'pay') {
       const bal = (Number(i.balance_pence) / 100).toFixed(2);
@@ -681,7 +708,7 @@ async function tabInvoices(t, c) {
   if (!can('manager')) { t.innerHTML = '<div class="alert">Only managers and administrators can see invoices.</div>'; return; }
   const inv = await api(`/api/invoices?contact_id=${encodeURIComponent(c.id)}`);
   t.innerHTML = `<div class="card table-card"><div class="card-head" style="padding:16px 20px 0"><h2>Invoices</h2><a class="btn-primary btn-sm" href="#/invoices">All invoices</a></div><div class="table-wrap"><table class="mobile-cards"><thead><tr><th>Number</th><th>Status</th><th class="num">Total</th><th class="num">Balance</th><th>Issued</th><th>Due</th></tr></thead><tbody>
-    ${inv.map((i, n) => `<tr class="click" data-n="${n}"><td>${esc(i.number)}</td><td>${badge(i.status)}</td><td class="num money" data-label="Total">${money(i.total_pence)}</td><td class="num money" data-label="Balance">${i.status === 'draft' ? '—' : money(i.balance_pence)}</td><td data-label="Issued">${fmtDate(i.issue_date)}</td><td data-label="Due">${fmtDate(i.due_date)}</td></tr>`).join('') || `<tr><td colspan="6">${empty('No invoices yet', 'Create one from Sales → Invoices.')}</td></tr>`}
+    ${inv.map((i, n) => `<tr class="click" data-n="${n}"><td>${esc(i.number)}</td><td>${badge(i.status)}</td><td class="num money" data-label="Total">${money(i.total_pence)}</td><td class="num money" data-label="Balance">${i.status === 'draft' ? '—' : money(i.balance_pence)}</td><td data-label="Issued">${fmtDate(i.issue_date)}</td><td data-label="Due">${dueText(i)}</td></tr>`).join('') || `<tr><td colspan="6">${empty('No invoices yet', 'Create one from Sales → Invoices.')}</td></tr>`}
     </tbody></table></div></div>`;
   t.querySelector('tbody').onclick = (e) => { const i = inv[e.target.closest('tr[data-n]')?.dataset.n]; if (i) previewPdf(`/api/invoices/${i.id}/pdf`, i.number); };
 }
