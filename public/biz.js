@@ -568,7 +568,7 @@ async function renderCustomer(el, id, tab = 'overview') {
   const active = c.contracts.find((k) => ['active', 'renewal_due', 'signed'].includes(k.status));
   const nextVisit = c.appointments.filter((a) => a.status === 'scheduled' && new Date(a.starts_at) > new Date()).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))[0];
   const openTasks = c.tasks.filter((t) => !t.done);
-  const tabs = [['overview', 'Overview'], ['people', 'People', c.people.length], ['sites', 'Sites', c.sites.filter((s) => !s.archived_at).length], ['proposals', 'Proposals', c.proposals.length], ['contracts', 'Contracts', c.contracts.length], ...(can('manager') ? [['invoices', 'Invoices']] : []), ['tasks', 'Tasks & visits', openTasks.length], ['documents', 'Documents', c.documents.length], ['timeline', 'Timeline']];
+  const tabs = [['overview', 'Overview'], ['people', 'People', c.people.length], ['sites', 'Sites', c.sites.filter((s) => !s.archived_at).length], ['proposals', 'Proposals', c.proposals.length], ['contracts', 'Contracts', c.contracts.length], ...(can('manager') ? [['invoices', 'Invoices', c.invoice_count]] : []), ['tasks', 'Tasks & visits', openTasks.length], ['documents', 'Documents', c.documents.length], ['timeline', 'Timeline']];
   el.innerHTML = `
     ${c.archived_at ? `<div class="alert alert-warn">This customer was archived on ${fmtDate(c.archived_at)}. <button class="btn-secondary btn-sm" id="p-restore">Restore</button></div>` : ''}
     <div class="profile-head"><div class="row" style="align-items:flex-start;flex-wrap:nowrap"><div class="avatar" aria-hidden="true">${esc((c.business || '?').trim()[0] || '?')}</div><div>
