@@ -202,9 +202,9 @@ function dueText(i) {
   const d = Math.round((Date.parse(String(i.due_date).slice(0, 10)) - Date.parse(isoDay())) / 864e5);
   return d > 0 ? `Due in ${d} day${d === 1 ? '' : 's'}: ${fmtDate(i.due_date)}` : d === 0 ? 'Due today' : `Overdue by ${-d} day${d === -1 ? '' : 's'}`;
 }
-async function renderInvoices(section) {
+async function renderInvoices(section, contact = null) {
   if (!can('manager')) { section.innerHTML = '<div class="alert">Only managers and administrators can create invoices.</div>'; return; }
-  const [invoices, customers] = await Promise.all([api('/api/invoices'), api('/api/contacts?limit=1000')]);
+  const [invoices, customers] = await Promise.all([api(`/api/invoices${contact ? `?contact_id=${encodeURIComponent(contact.id)}` : ''}`), api('/api/contacts?limit=1000')]);
   const active = customers.filter((c) => !c.archived_at).sort((a, b) => String(a.business || a.contact_name || '').localeCompare(String(b.business || b.contact_name || '')));
   const outstanding = invoices.filter((i) => ['issued', 'part_paid'].includes(i.status)).reduce((s, i) => s + Number(i.balance_pence), 0);
   const overdue = (i) => ['issued', 'part_paid'].includes(i.status) && String(i.due_date).slice(0, 10) < isoDay();
@@ -224,7 +224,7 @@ async function renderInvoices(section) {
       <label>Qty<input name="quantity" type="number" inputmode="decimal" min="0.001" step="0.001" value="${esc(l.quantity ?? '1')}" required></label>
       <label>Unit cost (£)<input name="unit_price" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(l.unit_price ?? '')}" placeholder="0.00" required></label>
       <button type="button" class="inv-remove" aria-label="Remove line" title="Remove line">×</button></div>`;
-  section.innerHTML = `<div class="page-head"><div><h1>Invoices</h1><p>${invoices.length ? `${invoices.length} invoice${invoices.length === 1 ? '' : 's'}${outstanding ? ` · ${money(outstanding)} outstanding` : ''}` : 'Create, issue and track payment of customer invoices.'}</p></div>
+  section.innerHTML = `<div class="page-head"><div>${contact ? '<h2>Invoices</h2>' : '<h1>Invoices</h1>'}<p>${invoices.length ? `${invoices.length} invoice${invoices.length === 1 ? '' : 's'}${outstanding ? ` · ${money(outstanding)} outstanding` : ''}` : 'Create, issue and track payment of customer invoices.'}</p></div>
       <div class="actions"><button class="btn-primary" id="inv-new">+ New invoice</button></div></div>
     <div class="card inv-form-card" id="inv-form-card" hidden>
       <div class="card-head"><h2 id="inv-form-title">New invoice</h2></div>
@@ -270,7 +270,7 @@ async function renderInvoices(section) {
       form.customer_note.value = inv.customer_note || ''; form.terms.value = inv.terms || '';
       form.querySelector('.inv-more').open = !!(inv.customer_note || inv.terms || inv.contract_total_pence != null || inv.deposit_pence != null);
       inv.lines.forEach((l) => addLine({ description: l.description, quantity: String(Number(l.quantity)), unit_price: (l.unit_price_pence / 100).toFixed(2) }));
-    } else addLine();
+    } else { addLine(); if (contact) form.contact_id.value = contact.id; }
     formCard.hidden = false; formCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
   section.querySelector('#inv-new').onclick = () => openForm();
@@ -290,7 +290,7 @@ async function renderInvoices(section) {
         contract_total: fd.get('contract_total'), deposit: fd.get('deposit'), customer_note: fd.get('customer_note'), terms: fd.get('terms') };
       const inv = await api(editing ? `/api/invoices/${editing}` : '/api/invoices', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(payload) });
       toast(editing ? `${inv.number} updated` : `Draft ${inv.number} saved — check the PDF, then tap Issue`);
-      await renderInvoices(section);
+      await renderInvoices(section, contact);
     });
   });
 
@@ -311,27 +311,27 @@ async function renderInvoices(section) {
     if (b.dataset.act === 'issue') {
       const ok = await modal({ title: `Issue ${i.number}?`, sub: `${esc(i.business || '')} · ${money(i.total_pence)}. Once issued it can't be edited, so check the PDF first.`, submit: 'Issue invoice',
         onSubmit: async () => { await api(`/api/invoices/${i.id}/issue`, { method: 'POST', body: '{}' }); return true; } });
-      if (ok !== null) { toast(`${i.number} issued`); await renderInvoices(section); }
+      if (ok !== null) { toast(`${i.number} issued`); await renderInvoices(section, contact); }
     }
     if (b.dataset.act === 'delete') {
       const ok = await modal({ title: `Delete ${i.number}?`, sub: 'This draft hasn’t been sent, so it can be deleted.', submit: 'Delete', danger: true,
         onSubmit: async () => { await api(`/api/invoices/${i.id}`, { method: 'DELETE' }); return true; } });
-      if (ok !== null) { toast('Draft deleted'); await renderInvoices(section); }
+      if (ok !== null) { toast('Draft deleted'); await renderInvoices(section, contact); }
     }
     if (b.dataset.act === 'paid') {
       const ok = await modal({ title: `Mark ${i.number} as paid?`, sub: `${esc(i.business || '')} · ${money(i.balance_pence)}`, body: field('Paid on', `<input name="paid_on" type="date" value="${isoDay()}" required>`), submit: 'Mark paid',
         onSubmit: async (_, fd) => { await api(`/api/invoices/${i.id}/payments`, { method: 'POST', body: JSON.stringify({ amount: Number(i.balance_pence) / 100, paid_on: fd.get('paid_on'), reference: '' }) }); return true; } });
-      if (ok !== null) { toast(`${i.number} marked paid`); await renderInvoices(section); }
+      if (ok !== null) { toast(`${i.number} marked paid`); await renderInvoices(section, contact); }
     }
     if (b.dataset.act === 'unpaid') {
       const ok = await modal({ title: `Mark ${i.number} as unpaid?`, sub: 'This removes the payments recorded against it.', submit: 'Mark unpaid', danger: true,
         onSubmit: async () => { await api(`/api/invoices/${i.id}/unpaid`, { method: 'POST', body: '{}' }); return true; } });
-      if (ok !== null) { toast(`${i.number} is unpaid again`); await renderInvoices(section); }
+      if (ok !== null) { toast(`${i.number} is unpaid again`); await renderInvoices(section, contact); }
     }
     if (b.dataset.act === 'remind') {
       const ok = await modal({ title: `Send a reminder for ${i.number}?`, sub: `Emails the customer the invoice PDF and the ${money(i.balance_pence)} still owed.`, submit: 'Send reminder',
         onSubmit: async () => api(`/api/invoices/${i.id}/remind`, { method: 'POST', body: '{}' }) });
-      if (ok) { toast(`Reminder sent to ${ok.to}`); await renderInvoices(section); }
+      if (ok) { toast(`Reminder sent to ${ok.to}`); await renderInvoices(section, contact); }
     }
     if (b.dataset.act === 'pay') {
       const bal = (Number(i.balance_pence) / 100).toFixed(2);
@@ -339,7 +339,7 @@ async function renderInvoices(section) {
         body: `${field('Amount (£)', `<input name="amount" type="number" inputmode="decimal" min="0.01" max="${bal}" step="0.01" value="${bal}" required>`)}${field('Paid on', `<input name="paid_on" type="date" value="${isoDay()}" required>`)}${field('Reference', '<input name="reference" maxlength="200" placeholder="e.g. bank transfer ref">', 'Optional')}`,
         submit: 'Record payment',
         onSubmit: async (_, fd) => { await api(`/api/invoices/${i.id}/payments`, { method: 'POST', body: JSON.stringify({ amount: Number(fd.get('amount')), paid_on: fd.get('paid_on'), reference: fd.get('reference') }) }); return true; } });
-      if (ok !== null) { toast('Payment recorded'); await renderInvoices(section); }
+      if (ok !== null) { toast('Payment recorded'); await renderInvoices(section, contact); }
     }
   });
 }
@@ -352,7 +352,7 @@ const VIEWS = {
   customers: { title: 'Customers', render: renderCustomers, detail: { section: 'customer', render: renderCustomer } },
   pipeline: { title: 'Pipeline' }, drafts: { title: 'Outreach drafts' }, campaigns: { title: 'Campaigns' }, calendar: { title: 'Calendar' },
   proposals: { title: 'Proposals', render: renderProposals, detail: { section: 'proposal', render: renderProposal } },
-  invoices: { title: 'Invoices', render: renderInvoices },
+  invoices: { title: 'Invoices', render: (el) => renderInvoices(el) },
   contracts: { title: 'Contracts', render: renderContracts, detail: { section: 'contract', render: renderContract } },
   documents: { title: 'Documents', render: renderDocuments },
   reports: { title: 'Reports', render: renderReports },
@@ -699,14 +699,8 @@ function tabContracts(t, c) {
     ${c.contracts.map((k) => `<tr class="click" onclick="location.hash='#/contracts/${k.id}'"><td>${esc(k.number)}</td><td>${badge(k.status)}</td><td class="num money" data-label="Monthly">${money(k.monthly_net_pence)}</td><td data-label="Start">${fmtDate(k.start_date)}</td><td data-label="Renewal">${fmtDate(k.renewal_date)}</td></tr>`).join('') || `<tr><td colspan="5">${empty('No contracts yet', 'Contracts are created from an accepted proposal.')}</td></tr>`}
     </tbody></table></div></div>`;
 }
-async function tabInvoices(t, c) {
-  if (!can('manager')) { t.innerHTML = '<div class="alert">Only managers and administrators can see invoices.</div>'; return; }
-  const inv = await api(`/api/invoices?contact_id=${encodeURIComponent(c.id)}`);
-  t.innerHTML = `<div class="card table-card"><div class="card-head" style="padding:16px 20px 0"><h2>Invoices</h2><a class="btn-primary btn-sm" href="#/invoices">All invoices</a></div><div class="table-wrap"><table class="mobile-cards"><thead><tr><th>Number</th><th>Status</th><th class="num">Total</th><th class="num">Balance</th><th>Issued</th><th>Due</th></tr></thead><tbody>
-    ${inv.map((i, n) => `<tr class="click" data-n="${n}"><td>${esc(i.number)}</td><td>${badge(i.status)}</td><td class="num money" data-label="Total">${money(i.total_pence)}</td><td class="num money" data-label="Balance">${i.status === 'draft' ? '—' : money(i.balance_pence)}</td><td data-label="Issued">${fmtDate(i.issue_date)}</td><td data-label="Due">${dueText(i)}</td></tr>`).join('') || `<tr><td colspan="6">${empty('No invoices yet', 'Create one from Sales → Invoices.')}</td></tr>`}
-    </tbody></table></div></div>`;
-  t.querySelector('tbody').onclick = (e) => { const i = inv[e.target.closest('tr[data-n]')?.dataset.n]; if (i) previewPdf(`/api/invoices/${i.id}/pdf`, i.number); };
-}
+// same cards and buttons as Sales → Invoices, just this customer's
+const tabInvoices = (t, c) => renderInvoices(t, c);
 function tabTasks(t, c, reload) {
   const visits = [...c.appointments].sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at));
   t.innerHTML = `<div class="grid-2"><div class="card" style="padding:0"><div class="card-head" style="padding:16px 20px 0"><h2>Tasks</h2><button class="btn-primary btn-sm" id="tt-add">+ Task</button></div><div id="tt-list"></div></div>
