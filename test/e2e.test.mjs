@@ -385,6 +385,30 @@ test('reports use real data with definitions; admin-only areas are protected', a
   await assert.rejects(pool.query(`delete from audit_log`), /append-only/);
 });
 
+test('invoices: draft with VAT, numbering, delete draft, issue, payments, PDF', async () => {
+  const c = (await admin.post('/api/contacts', { business: 'Northern Gym Ltd', contact_name: 'Sam', email: 'sam@gym.test' })).data;
+  const body = { contact_id: c.id, issue_date: '2026-10-01', due_date: '2026-10-15', vat_rate_bp: 2000, lines: [{ description: 'Office clean', quantity: 2, unit_price: 50 }, { description: 'Windows', quantity: 1, unit_price: 25.5 }] };
+  assert.equal((await staff.post('/api/invoices', body)).status, 403, 'staff cannot invoice');
+  assert.equal((await admin.post('/api/invoices', { ...body, due_date: '2026-09-01' })).status, 400, 'due before issue');
+  const a = (await admin.post('/api/invoices', body)).data;
+  assert.equal(a.number, 'INV-001-NG');
+  assert.deepEqual([a.subtotal_pence, a.vat_pence, a.total_pence].map(Number), [12550, 2510, 15060]);
+  assert.equal((await admin.post('/api/invoices', body)).data.number, 'INV-002-NG');
+  assert.equal((await admin.del(`/api/invoices/${a.id}`)).status, 204, 'drafts can be deleted');
+  const b = (await admin.get('/api/invoices')).data.find((i) => i.number === 'INV-002-NG');
+  assert.equal((await admin.post(`/api/invoices/${b.id}/payments`, { amount: 10 })).status, 409, 'no payments on drafts');
+  assert.equal((await admin.post(`/api/invoices/${b.id}/issue`)).status, 200);
+  assert.equal((await admin.del(`/api/invoices/${b.id}`)).status, 409, 'issued invoices stay');
+  assert.equal((await admin.post(`/api/invoices/${b.id}/payments`, { amount: 200 })).status, 400, 'overpayment');
+  assert.equal((await admin.post(`/api/invoices/${b.id}/payments`, { amount: 50.6 })).status, 201);
+  assert.equal((await admin.get(`/api/invoices/${b.id}`)).data.status, 'part_paid');
+  await admin.post(`/api/invoices/${b.id}/payments`, { amount: 100 });
+  assert.equal((await admin.get(`/api/invoices/${b.id}`)).data.status, 'paid');
+  const pdf = await admin.call('GET', `/api/invoices/${b.id}/pdf`, undefined, { raw: true });
+  assert.equal(pdf.status, 200);
+  assert.ok(PDF_OK(Buffer.from(await pdf.arrayBuffer()).toString('latin1')));
+});
+
 test('logout ends the session', async () => {
   assert.equal((await staff.post('/api/logout')).status, 200);
   assert.equal((await staff.get('/api/contacts')).status, 401);

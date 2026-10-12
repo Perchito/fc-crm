@@ -17,6 +17,7 @@ import { docusealRoutes, docusealWebhook, reconcileSignatures } from './lib/docu
 import { automationRoutes, runAutomation, scanSchedules } from './lib/automation.mjs';
 import { reportRoutes } from './lib/reports.mjs';
 import { libraryRoutes } from './lib/library.mjs';
+import { invoiceRoutes } from './lib/invoices.mjs';
 import { storageConfigured } from './lib/storage.mjs';
 
 const { DATABASE_URL, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
@@ -194,6 +195,7 @@ docusealRoutes(app, pool);
 automationRoutes(app, pool);
 reportRoutes(app, pool);
 libraryRoutes(app, pool);
+invoiceRoutes(app, pool);
 
 app.get('/api/contacts/:id/events', async (req, res) => {
   const { rows } = await pool.query('select * from events where contact_id = $1 order by at desc', [req.params.id]);

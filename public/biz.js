@@ -195,6 +195,39 @@ function previewPdf(url, title) {
   })();
 }
 
+// ── native invoicing ───────────────────────────────────────
+async function renderInvoices(section) {
+  if (!can('manager')) { section.innerHTML = '<div class="alert">Only managers and administrators can create invoices.</div>'; return; }
+  const [invoices, customers] = await Promise.all([api('/api/invoices'), api('/api/contacts?limit=1000')]);
+  const active = customers.filter(c => !c.archived_at);
+  section.innerHTML = `<div class="page-head"><h1>Invoices</h1><p>Create invoices from customer records, keep a consistent PDF layout, and track payments.</p></div>
+    <div class="card"><div class="card-head"><h2>Create invoice</h2><span class="dim-p">PDF layout follows your FC Cleaning Company invoice</span></div>
+    <form id="invoice-form" class="form-grid">
+      <label>Customer<select name="contact_id" required><option value="">Choose customer…</option>${active.map(c=>`<option value="${esc(c.id)}">${esc(c.business||c.contact_name||c.email||'Customer')}</option>`).join('')}</select></label>
+      <label>Issue date<input name="issue_date" type="date" value="${isoDay()}" required></label><label>Due date<input name="due_date" type="date" value="${isoDay(new Date(Date.now()+14*86400000))}" required></label>
+      <label>VAT rate<select name="vat_rate_bp"><option value="2000" selected>20%</option><option value="0">0%</option><option value="500">5%</option></select></label>
+      <div class="invoice-lines-wrap" style="grid-column:1/-1"><h3>Invoice lines</h3><div id="invoice-lines"><div class="invoice-line"><label>Description<input name="description" required value="Cleaning service"></label><label>Quantity<input name="quantity" type="number" min="0.001" step="0.001" value="1" required></label><label>Unit cost (£)<input name="unit_price" type="number" min="0" step="0.01" value="0.00" required></label><button type="button" class="btn-secondary remove-invoice-line" aria-label="Remove line">Remove</button></div></div><button type="button" id="invoice-add-line" class="btn-secondary">Add line</button></div>
+      <label>Total contract value incl. VAT (£)<input name="contract_total" type="number" min="0" step="0.01" placeholder="Optional"></label><label>Deposit/upfront amount incl. VAT (£)<input name="deposit" type="number" min="0" step="0.01" placeholder="Optional"></label>
+      <label style="grid-column:1/-1">Customer note<textarea name="customer_note" rows="2" placeholder="Please quote invoice number when making payment."></textarea></label>
+      <label style="grid-column:1/-1">Terms & conditions<textarea name="terms" rows="3" placeholder="Payment terms, deposit and remaining balance…"></textarea></label>
+      <div class="invoice-total-preview" id="invoice-total-preview" style="grid-column:1/-1" aria-live="polite"></div>
+      <div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap"><button type="submit" class="btn-primary">Save draft invoice</button></div>
+    </form></div>
+    <div class="card table-card"><div class="card-head"><h2>Invoice history</h2><span class="dim-p">Drafts can be issued; issued invoices can track payments.</span></div><table><thead><tr><th>Invoice</th><th>Customer</th><th>Issue date</th><th>Due date</th><th>Status</th><th>Total</th><th>Balance</th><th></th></tr></thead><tbody id="invoices-tbody">${invoices.map(i=>`<tr><td><b>${esc(i.number)}</b></td><td>${esc(i.business||'')}</td><td>${fmtDate(i.issue_date)}</td><td>${fmtDate(i.due_date)}</td><td>${badge(i.status)}</td><td>${money(i.total_pence)}</td><td>${money(i.balance_pence)}</td><td><button class="btn-ghost btn-sm" data-pdf-invoice="${esc(i.id)}" data-number="${esc(i.number)}">PDF</button>${i.status==='draft'?` <button class="btn-secondary btn-sm" data-issue-invoice="${esc(i.id)}">Issue</button> <button class="btn-ghost btn-sm" data-delete-invoice="${esc(i.id)}">Delete</button>`:''}${['issued','part_paid'].includes(i.status)&&Number(i.balance_pence)>0?` <button class="btn-secondary btn-sm" data-pay-invoice="${esc(i.id)}" data-balance="${esc(i.balance_pence)}">Record payment</button>`:''}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">No invoices yet. Create your first invoice above.</td></tr>'}</tbody></table></div>`;
+  const form=section.querySelector('#invoice-form'), linesEl=section.querySelector('#invoice-lines');
+  const addLine=(desc='Service',qty='1',price='0.00')=>{const row=document.createElement('div');row.className='invoice-line';row.innerHTML=`<label>Description<input name="description" required value="${esc(desc)}"></label><label>Quantity<input name="quantity" type="number" min="0.001" step="0.001" value="${qty}" required></label><label>Unit cost (£)<input name="unit_price" type="number" min="0" step="0.01" value="${price}" required></label><button type="button" class="btn-secondary remove-invoice-line">Remove</button>`;row.querySelector('button').addEventListener('click',()=>{if(linesEl.children.length>1)row.remove();updatePreview();});row.addEventListener('input',updatePreview);linesEl.appendChild(row);};
+  // The first line is already present in markup; wire it and support additional lines.
+  linesEl.querySelector('.remove-invoice-line').addEventListener('click',e=>{if(linesEl.children.length>1)e.currentTarget.closest('.invoice-line').remove();updatePreview();});
+  section.querySelector('#invoice-add-line').addEventListener('click',()=>{addLine();updatePreview();});
+  function updatePreview(){let sub=0;for(const row of linesEl.children){const q=Number(row.querySelector('[name=quantity]').value||0),u=Math.round(Number(row.querySelector('[name=unit_price]').value||0)*100);sub+=Math.round(q*u);}const rate=Number(form.vat_rate_bp.value||0),vat=Math.round(sub*rate/10000);section.querySelector('#invoice-total-preview').innerHTML=`<b>Subtotal:</b> ${money(sub)} &nbsp; <b>VAT:</b> ${money(vat)} &nbsp; <b>Total incl. VAT:</b> ${money(sub+vat)}`;}
+  form.addEventListener('input',updatePreview);form.vat_rate_bp.addEventListener('change',updatePreview);updatePreview();
+  form.addEventListener('submit',async e=>{e.preventDefault();await busy(form.querySelector('button[type=submit]'),async()=>{const fd=new FormData(form);const payload={contact_id:fd.get('contact_id'),issue_date:fd.get('issue_date'),due_date:fd.get('due_date'),vat_rate_bp:Number(fd.get('vat_rate_bp')),lines:[...linesEl.children].map(r=>({description:r.querySelector('[name=description]').value,quantity:Number(r.querySelector('[name=quantity]').value),unit_price:Number(r.querySelector('[name=unit_price]').value)})),contract_total:fd.get('contract_total'),deposit:fd.get('deposit'),customer_note:fd.get('customer_note'),terms:fd.get('terms')};const inv=await api('/api/invoices',{method:'POST',body:JSON.stringify(payload)});toast(`Draft ${inv.number} created`);await renderInvoices(section);});});
+  section.querySelectorAll('[data-pdf-invoice]').forEach(b=>b.addEventListener('click',()=>previewPdf(`/api/invoices/${b.dataset.pdfInvoice}/pdf`,b.dataset.number)));
+  section.querySelectorAll('[data-delete-invoice]').forEach(b=>b.addEventListener('click',async()=>{const ok=await modal({title:'Delete this draft invoice?',sub:'Drafts have not been sent, so they can be deleted.',submit:'Delete',danger:true,onSubmit:async()=>{await api(`/api/invoices/${b.dataset.deleteInvoice}`,{method:'DELETE'});return true;}});if(ok!==null){toast('Draft deleted');await renderInvoices(section);}}));
+  section.querySelectorAll('[data-issue-invoice]').forEach(b=>b.addEventListener('click',()=>busy(b,async()=>{await api(`/api/invoices/${b.dataset.issueInvoice}/issue`,{method:'POST',body:'{}'});toast('Invoice issued');await renderInvoices(section);}))); 
+  section.querySelectorAll('[data-pay-invoice]').forEach(b=>b.addEventListener('click',async()=>{const result=await modal({title:'Record payment',sub:`Outstanding balance ${money(b.dataset.balance)}`,body:`${field('Amount (£)','<input name="amount" type="number" min="0.01" step="0.01" required>')}${field('Payment date',`<input name="paid_on" type="date" value="${isoDay()}" required>`)}${field('Reference','<input name="reference" maxlength="200">')}`,submit:'Record payment',onSubmit:async(_,fd)=>{await api(`/api/invoices/${b.dataset.payInvoice}/payments`,{method:'POST',body:JSON.stringify({amount:Number(fd.get('amount')),paid_on:fd.get('paid_on'),reference:fd.get('reference')})});toast('Payment recorded');return true;}});if(result!==null)await renderInvoices(section);}));
+}
+
 // ── router ───────────────────────────────────────────────
 const LEGACY_VIEWS = { pipeline: () => loadContacts(), drafts: () => loadDraftsView(), campaigns: () => loadCampaignsView(), calendar: () => loadCalendarView(true) };
 const VIEWS = {
@@ -203,6 +236,7 @@ const VIEWS = {
   customers: { title: 'Customers', render: renderCustomers, detail: { section: 'customer', render: renderCustomer } },
   pipeline: { title: 'Pipeline' }, drafts: { title: 'Outreach drafts' }, campaigns: { title: 'Campaigns' }, calendar: { title: 'Calendar' },
   proposals: { title: 'Proposals', render: renderProposals, detail: { section: 'proposal', render: renderProposal } },
+  invoices: { title: 'Invoices', render: renderInvoices },
   contracts: { title: 'Contracts', render: renderContracts, detail: { section: 'contract', render: renderContract } },
   documents: { title: 'Documents', render: renderDocuments },
   reports: { title: 'Reports', render: renderReports },

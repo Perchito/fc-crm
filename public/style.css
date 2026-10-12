@@ -522,3 +522,10 @@ input[type=date], input[type=datetime-local], input[type=time] { min-width: 0; d
   .modal.pdf-modal { margin: 0; width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; }
   .pdf-bar { padding-top: calc(10px + env(safe-area-inset-top)); }
 }
+
+/* Native invoice editor — inherits the CRM's existing form, card and button palette. */
+.invoice-line{display:grid;grid-template-columns:minmax(220px,2fr) minmax(90px,.6fr) minmax(120px,.8fr) auto;gap:10px;align-items:end;padding:12px 0;border-bottom:1px solid var(--line,#e5e7eb)}
+.invoice-line label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted,#6b7280)}
+.invoice-line input{width:100%;min-width:0}
+.invoice-total-preview{padding:14px;background:var(--surface-2,#f8fafc);border-radius:8px;line-height:1.8}
+@media(max-width:700px){.invoice-line{grid-template-columns:1fr 1fr}.invoice-line label:first-child{grid-column:1/-1}.invoice-line button{justify-self:start}}
