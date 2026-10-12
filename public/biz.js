@@ -199,53 +199,127 @@ function previewPdf(url, title) {
 async function renderInvoices(section) {
   if (!can('manager')) { section.innerHTML = '<div class="alert">Only managers and administrators can create invoices.</div>'; return; }
   const [invoices, customers] = await Promise.all([api('/api/invoices'), api('/api/contacts?limit=1000')]);
-  const active = customers.filter(c => !c.archived_at);
-  section.innerHTML = `<div class="page-head"><div><h1>Invoices</h1><p>Every invoice you have created. Tap PDF to view or download one.</p></div>
-    <div class="actions"><button class="btn-primary" id="inv-new">+ New invoice</button></div></div>
-    <div class="toolbar"><input type="search" id="inv-q" placeholder="Search number or customer…" aria-label="Search invoices">
-      <select id="inv-status" aria-label="Status"><option value="">All statuses</option>${['draft','issued','part_paid','paid'].map(s=>`<option value="${s}">${label(s)}</option>`).join('')}</select></div>
-    <div class="card table-card"><div class="card-head"><h2>All invoices</h2><span class="dim-p">${invoices.length} total</span></div><table><thead><tr><th>Invoice</th><th>Customer</th><th>Issue date</th><th>Due date</th><th>Status</th><th>Total</th><th>Balance</th></tr></thead><tbody id="invoices-tbody">${invoices.map(i=>`<tr data-q="${esc((i.number+' '+(i.business||'')).toLowerCase())}" data-status="${esc(i.status)}"><td><b>${esc(i.number)}</b><div class="invoice-actions"><button class="btn-ghost btn-sm" data-pdf-invoice="${esc(i.id)}" data-number="${esc(i.number)}">PDF</button>${i.status==='draft'?` <button class="btn-secondary btn-sm" data-issue-invoice="${esc(i.id)}">Issue</button> <button class="btn-secondary btn-sm" data-edit-invoice="${esc(i.id)}">Edit</button> <button class="btn-ghost btn-sm" data-delete-invoice="${esc(i.id)}">Delete</button>`:''}${['issued','part_paid'].includes(i.status)&&Number(i.balance_pence)>0?` <button class="btn-secondary btn-sm" data-pay-invoice="${esc(i.id)}" data-balance="${esc(i.balance_pence)}">Record payment</button>`:''}</div></td><td>${esc(i.business||'')}</td><td>${fmtDate(i.issue_date)}</td><td>${fmtDate(i.due_date)}</td><td>${badge(i.status)}</td><td>${money(i.total_pence)}</td><td>${money(i.balance_pence)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No invoices yet. Tap + New invoice to create one.</td></tr>'}</tbody></table></div>
-    <div class="card" id="inv-form-card" hidden><div class="card-head"><h2>New invoice</h2><span class="dim-p">PDF layout follows your FC Cleaning Company invoice</span></div>
-    <form id="invoice-form" class="form-grid">
-      <label>Customer<select name="contact_id" required><option value="">Choose customer…</option>${active.map(c=>`<option value="${esc(c.id)}">${esc(c.business||c.contact_name||c.email||'Customer')}</option>`).join('')}</select></label>
-      <label>Issue date<input name="issue_date" type="date" value="${isoDay()}" required></label><label>Due date<input name="due_date" type="date" value="${isoDay(new Date(Date.now()+14*86400000))}" required></label>
-      <label>VAT rate<select name="vat_rate_bp"><option value="2000" selected>20%</option><option value="0">0%</option><option value="500">5%</option></select></label>
-      <div class="invoice-lines-wrap" style="grid-column:1/-1"><h3>Invoice lines</h3><div id="invoice-lines"><div class="invoice-line"><label>Description<input name="description" required value="Cleaning service"></label><label>Quantity<input name="quantity" type="number" min="0.001" step="0.001" value="1" required></label><label>Unit cost (£)<input name="unit_price" type="number" min="0" step="0.01" value="0.00" required></label><button type="button" class="btn-secondary remove-invoice-line" aria-label="Remove line">Remove</button></div></div><button type="button" id="invoice-add-line" class="btn-secondary">Add line</button></div>
-      <label>Total contract value incl. VAT (£)<input name="contract_total" type="number" min="0" step="0.01" placeholder="Optional"></label><label>Deposit/upfront amount incl. VAT (£)<input name="deposit" type="number" min="0" step="0.01" placeholder="Optional"></label>
-      <label style="grid-column:1/-1">Customer note<textarea name="customer_note" rows="2" placeholder="Please quote invoice number when making payment."></textarea></label>
-      <label style="grid-column:1/-1">Terms & conditions<textarea name="terms" rows="3" placeholder="Payment terms, deposit and remaining balance…"></textarea></label>
-      <div class="invoice-total-preview" id="invoice-total-preview" style="grid-column:1/-1" aria-live="polite"></div>
-      <div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap"><button type="submit" class="btn-primary">Save draft invoice</button></div>
-    </form></div>`;
-  const form=section.querySelector('#invoice-form'), linesEl=section.querySelector('#invoice-lines');
-  const formCard=section.querySelector('#inv-form-card');
-  section.querySelector('#inv-new').addEventListener('click',()=>{formCard.hidden=false;formCard.scrollIntoView({behavior:'smooth'});});
-  const filter=()=>{const q=section.querySelector('#inv-q').value.trim().toLowerCase(),st=section.querySelector('#inv-status').value;section.querySelectorAll('#invoices-tbody tr[data-q]').forEach(r=>{r.hidden=(q&&!r.dataset.q.includes(q))||(st&&r.dataset.status!==st);});};
-  section.querySelector('#inv-q').addEventListener('input',filter);section.querySelector('#inv-status').addEventListener('change',filter);
-  const addLine=(desc='Service',qty='1',price='0.00')=>{const row=document.createElement('div');row.className='invoice-line';row.innerHTML=`<label>Description<input name="description" required value="${esc(desc)}"></label><label>Quantity<input name="quantity" type="number" min="0.001" step="0.001" value="${qty}" required></label><label>Unit cost (£)<input name="unit_price" type="number" min="0" step="0.01" value="${price}" required></label><button type="button" class="btn-secondary remove-invoice-line">Remove</button>`;row.querySelector('button').addEventListener('click',()=>{if(linesEl.children.length>1)row.remove();updatePreview();});row.addEventListener('input',updatePreview);linesEl.appendChild(row);};
-  // The first line is already present in markup; wire it and support additional lines.
-  linesEl.querySelector('.remove-invoice-line').addEventListener('click',e=>{if(linesEl.children.length>1)e.currentTarget.closest('.invoice-line').remove();updatePreview();});
-  section.querySelector('#invoice-add-line').addEventListener('click',()=>{addLine();updatePreview();});
-  function updatePreview(){let sub=0;for(const row of linesEl.children){const q=Number(row.querySelector('[name=quantity]').value||0),u=Math.round(Number(row.querySelector('[name=unit_price]').value||0)*100);sub+=Math.round(q*u);}const rate=Number(form.vat_rate_bp.value||0),vat=Math.round(sub*rate/10000);section.querySelector('#invoice-total-preview').innerHTML=`<b>Subtotal:</b> ${money(sub)} &nbsp; <b>VAT:</b> ${money(vat)} &nbsp; <b>Total incl. VAT:</b> ${money(sub+vat)}`;}
-  form.addEventListener('input',updatePreview);form.vat_rate_bp.addEventListener('change',updatePreview);updatePreview();
-  form.addEventListener('submit',async e=>{e.preventDefault();await busy(form.querySelector('button[type=submit]'),async()=>{const fd=new FormData(form);const payload={contact_id:fd.get('contact_id'),issue_date:fd.get('issue_date'),due_date:fd.get('due_date'),vat_rate_bp:Number(fd.get('vat_rate_bp')),lines:[...linesEl.children].map(r=>({description:r.querySelector('[name=description]').value,quantity:Number(r.querySelector('[name=quantity]').value),unit_price:Number(r.querySelector('[name=unit_price]').value)})),contract_total:fd.get('contract_total'),deposit:fd.get('deposit'),customer_note:fd.get('customer_note'),terms:fd.get('terms')};const editing=form.dataset.editing;const inv=await api(editing?`/api/invoices/${editing}`:'/api/invoices',{method:editing?'PUT':'POST',body:JSON.stringify(payload)});toast(editing?`${inv.number} updated`:`Draft ${inv.number} created`);await renderInvoices(section);});});
-  section.querySelectorAll('[data-pdf-invoice]').forEach(b=>b.addEventListener('click',()=>previewPdf(`/api/invoices/${b.dataset.pdfInvoice}/pdf`,b.dataset.number)));
-  section.querySelectorAll('[data-edit-invoice]').forEach(b=>b.addEventListener('click',()=>busy(b,async()=>{
-    const inv=await api(`/api/invoices/${b.dataset.editInvoice}`);
-    form.dataset.editing=inv.id;
-    formCard.querySelector('h2').textContent=`Edit ${inv.number}`;
-    form.querySelector('button[type=submit]').textContent='Save changes';
-    form.contact_id.value=inv.contact_id;form.issue_date.value=String(inv.issue_date).slice(0,10);form.due_date.value=String(inv.due_date).slice(0,10);
-    form.vat_rate_bp.value=String(inv.vat_rate_bp);
-    form.contract_total.value=inv.contract_total_pence==null?'':(inv.contract_total_pence/100).toFixed(2);
-    form.deposit.value=inv.deposit_pence==null?'':(inv.deposit_pence/100).toFixed(2);
-    form.customer_note.value=inv.customer_note||'';form.terms.value=inv.terms||'';
-    linesEl.innerHTML='';for(const l of inv.lines)addLine(l.description,String(Number(l.quantity)),(l.unit_price_pence/100).toFixed(2));
-    updatePreview();formCard.hidden=false;formCard.scrollIntoView({behavior:'smooth'});
-  })));
-  section.querySelectorAll('[data-delete-invoice]').forEach(b=>b.addEventListener('click',async()=>{const ok=await modal({title:'Delete this draft invoice?',sub:'Drafts have not been sent, so they can be deleted.',submit:'Delete',danger:true,onSubmit:async()=>{await api(`/api/invoices/${b.dataset.deleteInvoice}`,{method:'DELETE'});return true;}});if(ok!==null){toast('Draft deleted');await renderInvoices(section);}}));
-  section.querySelectorAll('[data-issue-invoice]').forEach(b=>b.addEventListener('click',()=>busy(b,async()=>{await api(`/api/invoices/${b.dataset.issueInvoice}/issue`,{method:'POST',body:'{}'});toast('Invoice issued');await renderInvoices(section);}))); 
-  section.querySelectorAll('[data-pay-invoice]').forEach(b=>b.addEventListener('click',async()=>{const result=await modal({title:'Record payment',sub:`Outstanding balance ${money(b.dataset.balance)}`,body:`${field('Amount (£)','<input name="amount" type="number" min="0.01" step="0.01" required>')}${field('Payment date',`<input name="paid_on" type="date" value="${isoDay()}" required>`)}${field('Reference','<input name="reference" maxlength="200">')}`,submit:'Record payment',onSubmit:async(_,fd)=>{await api(`/api/invoices/${b.dataset.payInvoice}/payments`,{method:'POST',body:JSON.stringify({amount:Number(fd.get('amount')),paid_on:fd.get('paid_on'),reference:fd.get('reference')})});toast('Payment recorded');return true;}});if(result!==null)await renderInvoices(section);}));
+  const active = customers.filter((c) => !c.archived_at).sort((a, b) => String(a.business || a.contact_name || '').localeCompare(String(b.business || b.contact_name || '')));
+  const outstanding = invoices.filter((i) => ['issued', 'part_paid'].includes(i.status)).reduce((s, i) => s + Number(i.balance_pence), 0);
+  const overdue = (i) => ['issued', 'part_paid'].includes(i.status) && String(i.due_date).slice(0, 10) < isoDay();
+  const card = (i) => `<article class="inv-card" data-q="${esc(`${i.number} ${i.business || ''}`.toLowerCase())}" data-status="${esc(i.status)}">
+      <div class="inv-top"><b class="inv-no">${esc(i.number)}</b>${badge(i.status)}${overdue(i) ? '<span class="badge b-expired">Overdue</span>' : ''}</div>
+      <div class="inv-cust">${esc(i.business || '—')}</div>
+      <div class="inv-meta"><span>${i.status === 'draft' ? 'Dated' : 'Issued'} ${fmtDate(i.issue_date)}</span><span>Due ${fmtDate(i.due_date)}</span></div>
+      <div class="inv-money"><div><small>Total</small><b>${money(i.total_pence)}</b></div>${i.status === 'draft' ? '' : `<div><small>Balance</small><b>${money(i.balance_pence)}</b></div>`}</div>
+      <div class="inv-actions">
+        <button class="btn-secondary btn-sm" data-act="pdf">View PDF</button>
+        ${i.status === 'draft' ? '<button class="btn-secondary btn-sm" data-act="edit">Edit</button><button class="btn-primary btn-sm" data-act="issue">Issue</button><button class="btn-ghost btn-sm inv-del" data-act="delete">Delete</button>' : ''}
+        ${['issued', 'part_paid'].includes(i.status) && Number(i.balance_pence) > 0 ? '<button class="btn-primary btn-sm" data-act="pay">Record payment</button>' : ''}
+      </div></article>`;
+  const lineRow = (l = {}) => `<div class="invoice-line">
+      <label class="inv-desc">Description<input name="description" required maxlength="300" value="${esc(l.description ?? 'Cleaning service')}"></label>
+      <label>Qty<input name="quantity" type="number" inputmode="decimal" min="0.001" step="0.001" value="${esc(l.quantity ?? '1')}" required></label>
+      <label>Unit cost (£)<input name="unit_price" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(l.unit_price ?? '')}" placeholder="0.00" required></label>
+      <button type="button" class="inv-remove" aria-label="Remove line" title="Remove line">×</button></div>`;
+  section.innerHTML = `<div class="page-head"><div><h1>Invoices</h1><p>${invoices.length ? `${invoices.length} invoice${invoices.length === 1 ? '' : 's'}${outstanding ? ` · ${money(outstanding)} outstanding` : ''}` : 'Create, issue and track payment of customer invoices.'}</p></div>
+      <div class="actions"><button class="btn-primary" id="inv-new">+ New invoice</button></div></div>
+    <div class="card inv-form-card" id="inv-form-card" hidden>
+      <div class="card-head"><h2 id="inv-form-title">New invoice</h2></div>
+      <form id="invoice-form" class="form-grid" novalidate>
+        <label class="span-all">Customer<select name="contact_id" required><option value="">Choose customer…</option>${active.map((c) => `<option value="${esc(c.id)}">${esc(c.business || c.contact_name || c.email || 'Customer')}</option>`).join('')}</select></label>
+        <label>Issue date<input name="issue_date" type="date" value="${isoDay()}" required></label>
+        <label>Due date<input name="due_date" type="date" value="${isoDay(new Date(Date.now() + 14 * 86400000))}" required></label>
+        <label>VAT<select name="vat_rate_bp"><option value="2000">20%</option><option value="500">5%</option><option value="0">No VAT (0%)</option></select></label>
+        <fieldset class="span-all inv-lines"><legend>What you're charging for</legend><div id="invoice-lines"></div>
+          <button type="button" id="invoice-add-line" class="btn-ghost btn-sm">+ Add another line</button></fieldset>
+        <div class="span-all inv-totals" id="invoice-total-preview" aria-live="polite"></div>
+        <details class="span-all inv-more"><summary>Contract value, deposit, note and terms (optional)</summary><div class="form-grid">
+          <label>Total contract value incl. VAT (£)<input name="contract_total" type="number" inputmode="decimal" min="0" step="0.01"></label>
+          <label>Deposit / upfront incl. VAT (£)<input name="deposit" type="number" inputmode="decimal" min="0" step="0.01"></label>
+          <label class="span-all">Note to customer<textarea name="customer_note" rows="2" placeholder="e.g. Please quote the invoice number when paying."></textarea></label>
+          <label class="span-all">Terms &amp; conditions<textarea name="terms" rows="3" placeholder="e.g. Payment due within 14 days."></textarea></label></div></details>
+        <div class="span-all inv-form-actions"><button type="submit" class="btn-primary">Save draft</button><button type="button" class="btn-secondary" id="inv-cancel">Cancel</button></div>
+      </form></div>
+    ${invoices.length ? `<div class="toolbar"><input type="search" id="inv-q" placeholder="Search number or customer…" aria-label="Search invoices">
+      <select id="inv-status" aria-label="Status"><option value="">All statuses</option>${['draft', 'issued', 'part_paid', 'paid'].map((s) => `<option value="${s}">${label(s)}</option>`).join('')}</select></div>
+      <div class="inv-list" id="inv-list">${invoices.map(card).join('')}</div><p class="empty hidden" id="inv-none">No invoices match.</p>`
+      : empty('No invoices yet', 'Tap + New invoice to create your first one.')}`;
+
+  const form = section.querySelector('#invoice-form'), formCard = section.querySelector('#inv-form-card'), linesEl = section.querySelector('#invoice-lines');
+  const updatePreview = () => {
+    let sub = 0;
+    for (const row of linesEl.children) sub += Math.round(Number(row.querySelector('[name=quantity]').value || 0) * Math.round(Number(row.querySelector('[name=unit_price]').value || 0) * 100));
+    const rate = Number(form.vat_rate_bp.value || 0), vat = Math.round(sub * rate / 10000);
+    section.querySelector('#invoice-total-preview').innerHTML = `<div><span>Subtotal</span><b>${money(sub)}</b></div><div><span>VAT (${rate / 100}%)</span><b>${money(vat)}</b></div><div class="inv-grand"><span>Total</span><b>${money(sub + vat)}</b></div>`;
+  };
+  const addLine = (l) => { linesEl.insertAdjacentHTML('beforeend', lineRow(l)); syncRemove(); updatePreview(); };
+  const syncRemove = () => linesEl.querySelectorAll('.inv-remove').forEach((b) => { b.hidden = linesEl.children.length < 2; });
+  const openForm = (inv = null) => {
+    form.reset(); delete form.dataset.editing; linesEl.innerHTML = '';
+    section.querySelector('#inv-form-title').textContent = inv ? `Edit ${inv.number}` : 'New invoice';
+    form.querySelector('[type=submit]').textContent = inv ? 'Save changes' : 'Save draft';
+    if (inv) {
+      form.dataset.editing = inv.id;
+      form.contact_id.value = inv.contact_id; form.issue_date.value = String(inv.issue_date).slice(0, 10); form.due_date.value = String(inv.due_date).slice(0, 10);
+      form.vat_rate_bp.value = String(inv.vat_rate_bp);
+      form.contract_total.value = inv.contract_total_pence == null ? '' : (inv.contract_total_pence / 100).toFixed(2);
+      form.deposit.value = inv.deposit_pence == null ? '' : (inv.deposit_pence / 100).toFixed(2);
+      form.customer_note.value = inv.customer_note || ''; form.terms.value = inv.terms || '';
+      form.querySelector('.inv-more').open = !!(inv.customer_note || inv.terms || inv.contract_total_pence != null || inv.deposit_pence != null);
+      inv.lines.forEach((l) => addLine({ description: l.description, quantity: String(Number(l.quantity)), unit_price: (l.unit_price_pence / 100).toFixed(2) }));
+    } else addLine();
+    formCard.hidden = false; formCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  section.querySelector('#inv-new').onclick = () => openForm();
+  section.querySelector('#inv-cancel').onclick = () => { formCard.hidden = true; window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  section.querySelector('#invoice-add-line').onclick = () => { addLine({ description: '' }); linesEl.lastElementChild.querySelector('input').focus(); };
+  linesEl.addEventListener('click', (e) => { const b = e.target.closest('.inv-remove'); if (b && linesEl.children.length > 1) { b.closest('.invoice-line').remove(); syncRemove(); updatePreview(); } });
+  form.addEventListener('input', updatePreview); form.addEventListener('change', updatePreview);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!form.contact_id.value) { toast('Choose a customer first.', 'error'); form.contact_id.focus(); return; }
+    const bad = [...linesEl.querySelectorAll('input')].find((i) => !i.checkValidity() || !i.value.trim());
+    if (bad) { toast('Each line needs a description, quantity and unit cost.', 'error'); bad.focus(); return; }
+    await busy(form.querySelector('[type=submit]'), async () => {
+      const fd = new FormData(form), editing = form.dataset.editing;
+      const payload = { contact_id: fd.get('contact_id'), issue_date: fd.get('issue_date'), due_date: fd.get('due_date'), vat_rate_bp: Number(fd.get('vat_rate_bp')),
+        lines: [...linesEl.children].map((r) => ({ description: r.querySelector('[name=description]').value, quantity: Number(r.querySelector('[name=quantity]').value), unit_price: Number(r.querySelector('[name=unit_price]').value) })),
+        contract_total: fd.get('contract_total'), deposit: fd.get('deposit'), customer_note: fd.get('customer_note'), terms: fd.get('terms') };
+      const inv = await api(editing ? `/api/invoices/${editing}` : '/api/invoices', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+      toast(editing ? `${inv.number} updated` : `Draft ${inv.number} saved — check the PDF, then tap Issue`);
+      await renderInvoices(section);
+    });
+  });
+
+  const filter = () => {
+    const q = section.querySelector('#inv-q').value.trim().toLowerCase(), st = section.querySelector('#inv-status').value;
+    let shown = 0;
+    section.querySelectorAll('.inv-card').forEach((c) => { c.hidden = (q && !c.dataset.q.includes(q)) || (st && c.dataset.status !== st); if (!c.hidden) shown++; });
+    section.querySelector('#inv-none').classList.toggle('hidden', shown > 0);
+  };
+  section.querySelector('#inv-q')?.addEventListener('input', filter);
+  section.querySelector('#inv-status')?.addEventListener('change', filter);
+
+  section.querySelector('#inv-list')?.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const i = invoices[[...section.querySelectorAll('.inv-card')].indexOf(b.closest('.inv-card'))];
+    if (b.dataset.act === 'pdf') return previewPdf(`/api/invoices/${i.id}/pdf`, i.number);
+    if (b.dataset.act === 'edit') return busy(b, async () => openForm(await api(`/api/invoices/${i.id}`)));
+    if (b.dataset.act === 'issue') {
+      const ok = await modal({ title: `Issue ${i.number}?`, sub: `${esc(i.business || '')} · ${money(i.total_pence)}. Once issued it can't be edited, so check the PDF first.`, submit: 'Issue invoice',
+        onSubmit: async () => { await api(`/api/invoices/${i.id}/issue`, { method: 'POST', body: '{}' }); return true; } });
+      if (ok !== null) { toast(`${i.number} issued`); await renderInvoices(section); }
+    }
+    if (b.dataset.act === 'delete') {
+      const ok = await modal({ title: `Delete ${i.number}?`, sub: 'This draft hasn’t been sent, so it can be deleted.', submit: 'Delete', danger: true,
+        onSubmit: async () => { await api(`/api/invoices/${i.id}`, { method: 'DELETE' }); return true; } });
+      if (ok !== null) { toast('Draft deleted'); await renderInvoices(section); }
+    }
+    if (b.dataset.act === 'pay') {
+      const bal = (Number(i.balance_pence) / 100).toFixed(2);
+      const ok = await modal({ title: `Record payment · ${i.number}`, sub: `Outstanding ${money(i.balance_pence)}`,
+        body: `${field('Amount (£)', `<input name="amount" type="number" inputmode="decimal" min="0.01" max="${bal}" step="0.01" value="${bal}" required>`)}${field('Paid on', `<input name="paid_on" type="date" value="${isoDay()}" required>`)}${field('Reference', '<input name="reference" maxlength="200" placeholder="e.g. bank transfer ref">', 'Optional')}`,
+        submit: 'Record payment',
+        onSubmit: async (_, fd) => { await api(`/api/invoices/${i.id}/payments`, { method: 'POST', body: JSON.stringify({ amount: Number(fd.get('amount')), paid_on: fd.get('paid_on'), reference: fd.get('reference') }) }); return true; } });
+      if (ok !== null) { toast('Payment recorded'); await renderInvoices(section); }
+    }
+  });
 }
 
 // ── router ───────────────────────────────────────────────

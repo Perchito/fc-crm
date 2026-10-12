@@ -523,15 +523,44 @@ input[type=date], input[type=datetime-local], input[type=time] { min-width: 0; d
   .pdf-bar { padding-top: calc(10px + env(safe-area-inset-top)); }
 }
 
-/* Native invoice editor — inherits the CRM's existing form, card and button palette. */
-.invoice-line{display:grid;grid-template-columns:minmax(220px,2fr) minmax(90px,.6fr) minmax(120px,.8fr) auto;gap:10px;align-items:end;padding:12px 0;border-bottom:1px solid var(--line,#e5e7eb)}
-.invoice-line label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted,#6b7280)}
+/* Invoices — cards (phone and desktop), form */
+.b-issued { background: var(--info-bg); color: var(--info); }
+.b-part_paid { background: var(--warn-bg); color: var(--warn); }
+.b-paid { background: var(--ok-bg); color: var(--ok); }
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px 16px}
+.form-grid label{display:flex;flex-direction:column;gap:6px;font-weight:600;font-size:13px}
+.form-grid input,.form-grid select,.form-grid textarea{width:100%;min-width:0}
+.form-grid .span-all{grid-column:1/-1}
+.inv-form-card{border:2px solid var(--navy)}
+.inv-lines{border:0;padding:0;margin:0}
+.inv-lines legend{font-weight:700;margin-bottom:6px}
+.invoice-line{display:grid;grid-template-columns:minmax(0,3fr) minmax(70px,.8fr) minmax(100px,1fr) 36px;gap:10px;align-items:end;padding:10px 0;border-bottom:1px solid var(--line,#e5e7eb)}
+.invoice-line label{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600}
 .invoice-line input{width:100%;min-width:0}
-.invoice-total-preview{padding:14px;background:var(--surface-2,#f8fafc);border-radius:8px;line-height:1.8}
-@media(max-width:700px){.invoice-line{grid-template-columns:1fr 1fr}.invoice-line label:first-child{grid-column:1/-1}.invoice-line button{justify-self:start}}
-
-.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 16px}
-.form-grid>label{display:flex;flex-direction:column;gap:6px;font-weight:600}
-.form-grid>label input,.form-grid>label select,.form-grid>label textarea{width:100%;min-width:0}
-.invoice-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-#view-invoices .table-card{overflow-x:auto}
+.inv-remove{width:36px;height:40px;border:1px solid var(--line,#e5e7eb);background:none;border-radius:var(--radius-sm);font-size:20px;line-height:1;color:var(--muted,#6b7280);cursor:pointer}
+.inv-remove[hidden]{display:block;visibility:hidden}
+#invoice-add-line{margin-top:8px}
+.inv-totals{background:var(--navy-50,#f1f5f9);border-radius:8px;padding:12px 16px;display:grid;gap:4px;max-width:340px;margin-left:auto;width:100%}
+.inv-totals div{display:flex;justify-content:space-between;gap:12px}
+.inv-totals .inv-grand{border-top:1px solid var(--line,#e5e7eb);padding-top:6px;margin-top:2px;font-size:17px}
+.inv-more summary{cursor:pointer;font-weight:600;color:var(--navy);padding:4px 0}
+.inv-more[open] summary{margin-bottom:12px}
+.inv-form-actions{display:flex;gap:8px;flex-wrap:wrap}
+.inv-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.inv-card{background:#fff;border:1px solid var(--line,#e5e7eb);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.inv-card[hidden]{display:none}
+.inv-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.inv-no{font-size:16px;margin-right:auto}
+.inv-cust{font-weight:600}
+.inv-meta{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted,#6b7280)}
+.inv-money{display:flex;gap:24px;margin-top:2px}
+.inv-money small{display:block;font-size:12px;color:var(--muted,#6b7280)}
+.inv-money b{font-size:17px}
+.inv-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;padding-top:10px;border-top:1px solid var(--line,#e5e7eb)}
+.inv-actions .inv-del{margin-left:auto;color:var(--danger,#b42318)}
+@media(max-width:700px){
+  .invoice-line{grid-template-columns:1fr 1fr 36px}
+  .invoice-line .inv-desc{grid-column:1/-1}
+  .inv-totals{max-width:none}
+  .inv-form-actions button{flex:1}
+}
