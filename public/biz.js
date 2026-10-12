@@ -205,7 +205,9 @@ function dueText(i) {
 async function renderInvoices(section, contact = null) {
   if (!can('manager')) { section.innerHTML = '<div class="alert">Only managers and administrators can create invoices.</div>'; return; }
   const [invoices, customers] = await Promise.all([api(`/api/invoices${contact ? `?contact_id=${encodeURIComponent(contact.id)}` : ''}`), api('/api/contacts?limit=1000')]);
-  const active = customers.filter((c) => !c.archived_at).sort((a, b) => String(a.business || a.contact_name || '').localeCompare(String(b.business || b.contact_name || '')));
+  // only customers we've at least quoted (or already invoiced) — not every prospect
+  const invoiced = new Set(invoices.map((i) => i.contact_id));
+  const active = customers.filter((c) => !c.archived_at && (['quoted', 'won'].includes(c.pipeline_stage) || invoiced.has(c.id) || c.id === contact?.id)).sort((a, b) => String(a.business || a.contact_name || '').localeCompare(String(b.business || b.contact_name || '')));
   const outstanding = invoices.filter((i) => ['issued', 'part_paid'].includes(i.status)).reduce((s, i) => s + Number(i.balance_pence), 0);
   const overdue = (i) => ['issued', 'part_paid'].includes(i.status) && String(i.due_date).slice(0, 10) < isoDay();
   const card = (i) => `<article class="inv-card" data-q="${esc(`${i.number} ${i.business || ''}`.toLowerCase())}" data-status="${esc(i.status)}">
