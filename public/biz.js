@@ -546,7 +546,7 @@ async function renderCustomer(el, id, tab = 'overview') {
   const active = c.contracts.find((k) => ['active', 'renewal_due', 'signed'].includes(k.status));
   const nextVisit = c.appointments.filter((a) => a.status === 'scheduled' && new Date(a.starts_at) > new Date()).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))[0];
   const openTasks = c.tasks.filter((t) => !t.done);
-  const tabs = [['overview', 'Overview'], ['people', 'People', c.people.length], ['sites', 'Sites', c.sites.filter((s) => !s.archived_at).length], ['proposals', 'Proposals', c.proposals.length], ['contracts', 'Contracts', c.contracts.length], ['tasks', 'Tasks & visits', openTasks.length], ['documents', 'Documents', c.documents.length], ['timeline', 'Timeline']];
+  const tabs = [['overview', 'Overview'], ['people', 'People', c.people.length], ['sites', 'Sites', c.sites.filter((s) => !s.archived_at).length], ['proposals', 'Proposals', c.proposals.length], ['contracts', 'Contracts', c.contracts.length], ...(can('manager') ? [['invoices', 'Invoices']] : []), ['tasks', 'Tasks & visits', openTasks.length], ['documents', 'Documents', c.documents.length], ['timeline', 'Timeline']];
   el.innerHTML = `
     ${c.archived_at ? `<div class="alert alert-warn">This customer was archived on ${fmtDate(c.archived_at)}. <button class="btn-secondary btn-sm" id="p-restore">Restore</button></div>` : ''}
     <div class="profile-head"><div class="row" style="align-items:flex-start;flex-wrap:nowrap"><div class="avatar" aria-hidden="true">${esc((c.business || '?').trim()[0] || '?')}</div><div>
@@ -591,7 +591,7 @@ async function renderCustomer(el, id, tab = 'overview') {
     }
   });
   const t = el.querySelector('#p-tab');
-  const TABS = { overview: tabOverview, people: tabPeople, sites: tabSites, proposals: tabProposals, contracts: tabContracts, tasks: tabTasks, documents: tabDocuments, timeline: tabTimeline };
+  const TABS = { overview: tabOverview, people: tabPeople, sites: tabSites, proposals: tabProposals, contracts: tabContracts, invoices: tabInvoices, tasks: tabTasks, documents: tabDocuments, timeline: tabTimeline };
   await (TABS[tab] || tabOverview)(t, c, reload);
 }
 
@@ -676,6 +676,14 @@ function tabContracts(t, c) {
   t.innerHTML = `<div class="card table-card"><h2>Contracts</h2><div class="table-wrap"><table class="mobile-cards"><thead><tr><th>Reference</th><th>Status</th><th class="num">Monthly</th><th>Start</th><th>Renewal</th></tr></thead><tbody>
     ${c.contracts.map((k) => `<tr class="click" onclick="location.hash='#/contracts/${k.id}'"><td>${esc(k.number)}</td><td>${badge(k.status)}</td><td class="num money" data-label="Monthly">${money(k.monthly_net_pence)}</td><td data-label="Start">${fmtDate(k.start_date)}</td><td data-label="Renewal">${fmtDate(k.renewal_date)}</td></tr>`).join('') || `<tr><td colspan="5">${empty('No contracts yet', 'Contracts are created from an accepted proposal.')}</td></tr>`}
     </tbody></table></div></div>`;
+}
+async function tabInvoices(t, c) {
+  if (!can('manager')) { t.innerHTML = '<div class="alert">Only managers and administrators can see invoices.</div>'; return; }
+  const inv = await api(`/api/invoices?contact_id=${encodeURIComponent(c.id)}`);
+  t.innerHTML = `<div class="card table-card"><div class="card-head" style="padding:16px 20px 0"><h2>Invoices</h2><a class="btn-primary btn-sm" href="#/invoices">All invoices</a></div><div class="table-wrap"><table class="mobile-cards"><thead><tr><th>Number</th><th>Status</th><th class="num">Total</th><th class="num">Balance</th><th>Issued</th><th>Due</th></tr></thead><tbody>
+    ${inv.map((i, n) => `<tr class="click" data-n="${n}"><td>${esc(i.number)}</td><td>${badge(i.status)}</td><td class="num money" data-label="Total">${money(i.total_pence)}</td><td class="num money" data-label="Balance">${i.status === 'draft' ? '—' : money(i.balance_pence)}</td><td data-label="Issued">${fmtDate(i.issue_date)}</td><td data-label="Due">${fmtDate(i.due_date)}</td></tr>`).join('') || `<tr><td colspan="6">${empty('No invoices yet', 'Create one from Sales → Invoices.')}</td></tr>`}
+    </tbody></table></div></div>`;
+  t.querySelector('tbody').onclick = (e) => { const i = inv[e.target.closest('tr[data-n]')?.dataset.n]; if (i) previewPdf(`/api/invoices/${i.id}/pdf`, i.number); };
 }
 function tabTasks(t, c, reload) {
   const visits = [...c.appointments].sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at));
