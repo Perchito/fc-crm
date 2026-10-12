@@ -529,3 +529,9 @@ input[type=date], input[type=datetime-local], input[type=time] { min-width: 0; d
 .invoice-line input{width:100%;min-width:0}
 .invoice-total-preview{padding:14px;background:var(--surface-2,#f8fafc);border-radius:8px;line-height:1.8}
 @media(max-width:700px){.invoice-line{grid-template-columns:1fr 1fr}.invoice-line label:first-child{grid-column:1/-1}.invoice-line button{justify-self:start}}
+
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 16px}
+.form-grid>label{display:flex;flex-direction:column;gap:6px;font-weight:600}
+.form-grid>label input,.form-grid>label select,.form-grid>label textarea{width:100%;min-width:0}
+.invoice-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+#view-invoices .table-card{overflow-x:auto}
