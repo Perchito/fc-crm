@@ -394,11 +394,15 @@ test('invoices: draft with VAT, numbering, delete draft, issue, payments, PDF', 
   assert.equal(a.number, 'INV-001-NG');
   assert.deepEqual([a.subtotal_pence, a.vat_pence, a.total_pence].map(Number), [12550, 2510, 15060]);
   assert.equal((await admin.post('/api/invoices', body)).data.number, 'INV-002-NG');
+  const ed = await admin.put(`/api/invoices/${a.id}`, { ...body, lines: [{ description: 'Deep clean', quantity: 1, unit_price: 200 }] });
+  assert.equal(ed.status, 200); assert.equal(ed.data.number, 'INV-001-NG'); assert.equal(Number(ed.data.total_pence), 24000);
+  assert.equal((await admin.get(`/api/invoices/${a.id}`)).data.lines.length, 1);
   assert.equal((await admin.del(`/api/invoices/${a.id}`)).status, 204, 'drafts can be deleted');
   const b = (await admin.get('/api/invoices')).data.find((i) => i.number === 'INV-002-NG');
   assert.equal((await admin.post(`/api/invoices/${b.id}/payments`, { amount: 10 })).status, 409, 'no payments on drafts');
   assert.equal((await admin.post(`/api/invoices/${b.id}/issue`)).status, 200);
   assert.equal((await admin.del(`/api/invoices/${b.id}`)).status, 409, 'issued invoices stay');
+  assert.equal((await admin.put(`/api/invoices/${b.id}`, body)).status, 409, 'issued invoices cannot be edited');
   assert.equal((await admin.post(`/api/invoices/${b.id}/payments`, { amount: 200 })).status, 400, 'overpayment');
   assert.equal((await admin.post(`/api/invoices/${b.id}/payments`, { amount: 50.6 })).status, 201);
   assert.equal((await admin.get(`/api/invoices/${b.id}`)).data.status, 'part_paid');
