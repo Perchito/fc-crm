@@ -216,8 +216,7 @@ async function renderInvoices(section) {
       <div class="inv-actions">
         <button class="btn-secondary btn-sm" data-act="pdf">View PDF</button>
         ${i.status === 'draft' ? '<button class="btn-secondary btn-sm" data-act="edit">Edit</button><button class="btn-primary btn-sm" data-act="issue">Issue</button><button class="btn-ghost btn-sm inv-del" data-act="delete">Delete</button>' : ''}
-        ${['issued', 'part_paid'].includes(i.status) && Number(i.balance_pence) > 0 ? `<button class="btn-primary btn-sm" data-act="paid">Mark paid</button><button class="btn-secondary btn-sm" data-act="pay">Part payment</button><button class="btn-secondary btn-sm" data-act="remind">Send reminder</button>
-          <label class="inv-auto"><input type="checkbox" data-act="auto" ${i.reminders ? 'checked' : ''}> Auto reminders</label>` : ''}
+        ${['issued', 'part_paid'].includes(i.status) && Number(i.balance_pence) > 0 ? `<button class="btn-primary btn-sm" data-act="paid">Mark paid</button><button class="btn-secondary btn-sm" data-act="pay">Part payment</button><button class="btn-secondary btn-sm" data-act="remind">Send reminder</button>` : ''}
         ${['paid', 'part_paid'].includes(i.status) ? '<button class="btn-ghost btn-sm" data-act="unpaid">Mark unpaid</button>' : ''}
       </div></article>`;
   const lineRow = (l = {}) => `<div class="invoice-line">
@@ -318,10 +317,6 @@ async function renderInvoices(section) {
       const ok = await modal({ title: `Delete ${i.number}?`, sub: 'This draft hasn’t been sent, so it can be deleted.', submit: 'Delete', danger: true,
         onSubmit: async () => { await api(`/api/invoices/${i.id}`, { method: 'DELETE' }); return true; } });
       if (ok !== null) { toast('Draft deleted'); await renderInvoices(section); }
-    }
-    if (b.dataset.act === 'auto') {
-      try { await api(`/api/invoices/${i.id}/reminders`, { method: 'PATCH', body: JSON.stringify({ enabled: b.checked }) }); toast(b.checked ? 'Automatic reminders on' : 'Automatic reminders off'); } catch (err) { b.checked = !b.checked; toast(err.message, 'error'); }
-      return;
     }
     if (b.dataset.act === 'paid') {
       const ok = await modal({ title: `Mark ${i.number} as paid?`, sub: `${esc(i.business || '')} · ${money(i.balance_pence)}`, body: field('Paid on', `<input name="paid_on" type="date" value="${isoDay()}" required>`), submit: 'Mark paid',

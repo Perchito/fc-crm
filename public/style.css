@@ -558,7 +558,6 @@ input[type=date], input[type=datetime-local], input[type=time] { min-width: 0; d
 .inv-money b{font-size:17px}
 .inv-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;padding-top:10px;border-top:1px solid var(--line,#e5e7eb)}
 .inv-late{color:var(--danger,#b42318);font-weight:600}
-.inv-auto{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted,#6b7280)}
 .inv-actions .inv-del{margin-left:auto;color:var(--danger,#b42318)}
 @media(max-width:700px){
   .invoice-line{grid-template-columns:1fr 1fr 36px}

@@ -415,8 +415,6 @@ test('invoices: draft with VAT, numbering, delete draft, issue, payments, PDF', 
   assert.equal((await admin.post(`/api/invoices/${b.id}/unpaid`)).status, 200);
   const back = (await admin.get(`/api/invoices/${b.id}`)).data;
   assert.equal(back.status, 'issued'); assert.equal(back.payments.length, 0);
-  assert.equal((await admin.patch(`/api/invoices/${b.id}/reminders`, { enabled: false })).status, 200);
-  assert.equal((await admin.get(`/api/invoices?contact_id=${body.contact_id}`)).data.find((i) => i.id === b.id).reminders, false);
 });
 
 test('logout ends the session', async () => {
