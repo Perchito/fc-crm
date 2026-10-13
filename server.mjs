@@ -177,6 +177,15 @@ app.get('/cal/:secret.ics', async (req, res) => {
 app.get(/^\/fc-logo(-white)?\.(png|webp)$/, (req, res) => res.sendFile(req.path.slice(1), { root: 'public', maxAge: '1d' }));
 app.get('/login', (req, res) => res.set('Cache-Control', 'no-cache').sendFile('login.html', { root: 'public' }));
 
+// installable app (PWA): manifest, service worker and icons are public — browsers fetch the manifest without cookies
+// Cloudflare tells browsers to cache .js/.css for 4h, so stamp them with this
+// process's start time: every deploy (restart) makes browsers fetch fresh copies.
+const VERSION = Date.now();
+const swJs = (await readFile('public/sw.js', 'utf8')).replace('__V__', VERSION);
+app.get('/sw.js', (req, res) => res.set('Cache-Control', 'no-cache').type('js').send(swJs));
+app.get('/manifest.json', (req, res) => res.set('Cache-Control', 'no-cache').sendFile('manifest.json', { root: 'public' }));
+app.use('/img', express.static('public/img', { maxAge: '1d' }));
+
 // ── everything below needs a signed-in user ─────────────────────────────────
 const auth = mountAuth(app, pool);
 app.use(auth.gate);
@@ -454,9 +463,6 @@ app.delete('/api/suppression/:email', requireRole('manager'), async (req, res) =
   res.status(204).end();
 });
 
-// Cloudflare tells browsers to cache .js/.css for 4h, so stamp them with this
-// process's start time: every deploy (restart) makes browsers fetch fresh copies.
-const VERSION = Date.now();
 const indexHtml = (await readFile('public/index.html', 'utf8')).replace(/(\w+\.(?:js|css))"/g, `$1?v=${VERSION}"`);
 app.get(['/', '/index.html'], (req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml));
 app.use(express.static('public'));
