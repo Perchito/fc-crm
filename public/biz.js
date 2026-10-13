@@ -918,7 +918,7 @@ function linesEditor(box, state, { readonly, onChange }) {
     const hourly = l.billing === 'hourly', oneOff = l.frequency === 'one_off';
     return `<div class="line-card ${l.optional ? 'optional' : ''}" data-i="${i}">
       <div class="line-head"><input class="l-name" data-k="name" value="${esc(l.name)}" placeholder="Service name" ${dis} aria-label="Service name">
-        ${readonly ? '' : `<button type="button" class="icon-btn" data-act="up" title="Move up" aria-label="Move up">↑</button><button type="button" class="icon-btn" data-act="down" title="Move down" aria-label="Move down">↓</button><button type="button" class="icon-btn danger" data-act="rm" title="Remove" aria-label="Remove line">✕</button>`}</div>
+        ${readonly ? '' : `${oneOff ? '' : '<button type="button" class="btn-ghost btn-sm" data-act="cost" title="Work out a monthly price from wages and costs">£ Cost calculator</button>'}<button type="button" class="icon-btn" data-act="up" title="Move up" aria-label="Move up">↑</button><button type="button" class="icon-btn" data-act="down" title="Move down" aria-label="Move down">↓</button><button type="button" class="icon-btn danger" data-act="rm" title="Remove" aria-label="Remove line">✕</button>`}</div>
       <div class="line-grid">
         ${field('Billed', `<select data-k="billing" ${dis}><option value="fixed" ${!hourly ? 'selected' : ''}>Fixed price</option><option value="hourly" ${hourly ? 'selected' : ''}>Hourly rate</option></select>`)}
         ${field('Frequency', `<select data-k="frequency" ${dis}>${FREQ.map(([v, t]) => `<option value="${v}" ${v === l.frequency ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
@@ -954,11 +954,46 @@ function linesEditor(box, state, { readonly, onChange }) {
     const act = e.target.dataset.act, card = e.target.closest('.line-card');
     if (!act || !card) return;
     const i = Number(card.dataset.i);
+    if (act === 'cost') return costCalculator(lines[i]).then((ok) => ok && onChange(true));
     if (act === 'rm') lines.splice(i, 1);
     if (act === 'up' && i > 0) [lines[i - 1], lines[i]] = [lines[i], lines[i - 1]];
     if (act === 'down' && i < lines.length - 1) [lines[i + 1], lines[i]] = [lines[i], lines[i + 1]];
     onChange(true);
   };
+}
+// Contract pricing calculator (FC_Cleaning_Co_LTD_-_Project.xlsx, "calculator" sheet): cost-plus,
+// price = (wages + on-costs + materials + travel) × (1 + profit on cost). Monthly hours = days × hours × staff × 52 ÷ 12.
+const COST_DEFAULTS = { wage: 20, pension: 3, ni: 13.8, holiday: 12.07, materials: 120, travel: 40, profit: 40 };
+function costing(v) {
+  const hours = v.days * v.hours * v.staff * 52 / 12, wages = hours * v.wage;
+  const oncost = wages * (v.pension + v.ni + v.holiday) / 100;
+  const cost = wages + oncost + v.materials + v.travel, price = Math.round(cost * (1 + v.profit / 100) * 100); // pence
+  return { hours, wages, oncost, cost, price, profit: price / 100 - cost, perHour: hours ? price / 100 / hours : 0, margin: price ? (1 - cost * 100 / price) * 100 : 0 };
+}
+async function costCalculator(l) {
+  const v = { days: Number(l.visits_per_week) || 1, hours: Number(l.hours_per_visit) || 6.5, staff: Number(l.staff) || 1, ...COST_DEFAULTS };
+  const inp = (k, lbl, step = '0.01') => field(lbl, `<input type="number" min="0" step="${step}" name="${k}" value="${v[k]}">`);
+  const pending = modal({ title: 'Cost calculator', sub: `${esc(l.name)} — works out a monthly price from wages and running costs.`, submit: 'Use this price',
+    body: `<div class="fields">${inp('days', 'Days (visits) / week', '0.5')}${inp('hours', 'Hours / visit', '0.25')}${inp('staff', 'Staff', '1')}${inp('wage', 'Blended wage £/hr')}
+      ${inp('pension', 'Employer pension %')}${inp('ni', 'Employer NI %')}${inp('holiday', 'Holiday pay %')}${inp('materials', 'Materials £/month')}${inp('travel', 'Travel/admin £/month')}${inp('profit', 'Profit on cost %')}</div>
+      <table class="totals" id="cc-out"></table>`,
+    onSubmit: async (f) => {
+      const r = costing(read(f));
+      if (!(r.price > 0)) throw new Error('Fill in the days, hours and wage first.');
+      Object.assign(l, { billing: 'fixed', frequency: 'monthly', price_pence: r.price, visits_per_week: v.days, hours_per_visit: v.hours, staff: v.staff });
+      return true;
+    } });
+  const form = modalEl.querySelector('form');
+  const read = (f) => { for (const k of Object.keys(v)) v[k] = Number(f.elements[k].value) || 0; return v; };
+  const draw = () => {
+    const r = costing(read(form)), gbp = (n) => money(Math.round(n * 100));
+    form.querySelector('#cc-out').innerHTML = `<tbody><tr><td>Labour hours / month</td><td>${r.hours.toFixed(2)}</td></tr><tr><td>Wages</td><td>${gbp(r.wages)}</td></tr>
+      <tr><td>Pension, NI & holiday</td><td>${gbp(r.oncost)}</td></tr><tr><td>Total monthly cost</td><td>${gbp(r.cost)}</td></tr>
+      <tr class="strong"><td>Suggested price / month</td><td>${money(r.price)}</td></tr><tr><td>Charge-out rate</td><td>${gbp(r.perHour)}/hr</td></tr>
+      <tr><td>Profit / month</td><td>${gbp(r.profit)} <span class="muted">(${r.margin.toFixed(1)}% of price)</span></td></tr></tbody>`;
+  };
+  form.addEventListener('input', draw); draw();
+  return pending;
 }
 const newLineId = () => `l${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 const num = (v) => (v == null || v === '' ? '' : Number(v));
