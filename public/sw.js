@@ -5,7 +5,7 @@ const SHELL = 'fccrm-shell';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();  // network-first, so taking over straight away can't serve stale code
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/manifest.json', '/img/icon-192.png', '/fc-logo-white.png']).catch(() => {})));
+  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/manifest.json', '/img/app-icon-192.png', '/fc-logo-white.png']).catch(() => {})));
 });
 self.addEventListener('activate', (e) => e.waitUntil((async () => {
   for (const k of await caches.keys()) if (k !== SHELL) await caches.delete(k);
