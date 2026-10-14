@@ -17,7 +17,7 @@ import { docusealRoutes, docusealWebhook, reconcileSignatures } from './lib/docu
 import { automationRoutes, runAutomation, scanSchedules } from './lib/automation.mjs';
 import { reportRoutes } from './lib/reports.mjs';
 import { libraryRoutes } from './lib/library.mjs';
-import { invoiceRoutes } from './lib/invoices.mjs';
+import { invoiceRoutes, sendDueReminders } from './lib/invoices.mjs';
 import { storageConfigured } from './lib/storage.mjs';
 
 const { DATABASE_URL, PORT = 4600, ENGINE_TICK_MS = 5 * 60_000 } = process.env;
@@ -480,6 +480,7 @@ const timers = [
   setInterval(() => sendReminders(pool).catch((err) => console.error('reminders failed:', err)), 15 * 60_000),
   every(60 * 60_000, 'schedule scan', () => scanSchedules(pool)),
   every(30 * 60_000, 'signature reconcile', () => reconcileSignatures(pool)),
+  every(60 * 60_000, 'invoice reminders', () => sendDueReminders(pool)),
 ];
 
 // graceful shutdown: finish in-flight requests, then close the pool
