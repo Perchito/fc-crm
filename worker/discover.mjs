@@ -56,7 +56,7 @@ deadline.setHours(DEADLINE_HOUR, 0, 0, 0);
 if (deadline <= new Date()) deadline.setDate(deadline.getDate() + 1); // manual daytime run: give it until tomorrow 07:00
 
 const promptFor = (skip) => `Find ${BATCH} independent, family-owned or owner-operated bars, restaurants and
-cafés in or near ${BOROUGH}, Greater Manchester, UK.
+cafés in or near ${BOROUGH}${BOROUGHS.includes(BOROUGH) ? ', Greater Manchester' : ''}, UK.
 
 ONLY include a venue that is genuinely independent — a single site, or at most 2-3 sites run by
 the same named owner(s). EXCLUDE: national or regional chains, franchises, pub companies /
@@ -87,14 +87,28 @@ function extractJson(text) {
   try { return JSON.parse(m[0]); } catch { return null; }
 }
 
+// web pages give us "Wine &amp; Dine"
+const unescape = (v) => typeof v !== 'string' ? v : v.replace(/&(amp|quot|#39|apos|lt|gt|#(\d+));/g, (_, e, n) =>
+  n ? String.fromCharCode(+n) : { amp: '&', quot: '"', '#39': "'", apos: "'", lt: '<', gt: '>' }[e]);
+
 async function findLeads(skip) {
-  const { stdout } = await claude(['-p', promptFor(skip), '--model', DISCOVER_MODEL, '--max-turns', '40'], {
-    timeout: 10 * 60_000,
-    maxBuffer: 8 * 1024 * 1024,
-  });
+  let stdout;
+  try {
+    ({ stdout } = await claude(['-p', promptFor(skip), '--model', DISCOVER_MODEL, '--max-turns', '40'], {
+      timeout: 10 * 60_000,
+      maxBuffer: 8 * 1024 * 1024,
+      label: `discover batch ${BOROUGH}`,
+    }));
+  } catch (err) {
+    // the CLI sometimes exits non-zero after a finished answer: keep the answer rather than retrying a $1 batch
+    if (!/"subtype":"success"/.test(err.stdout || '')) throw err;
+    stdout = err.stdout;
+  }
   let result = stdout;
   try { result = JSON.parse(stdout).result ?? stdout; } catch { /* raw text */ }
-  return extractJson(result) || [];
+  const leads = extractJson(result);
+  if (!leads) console.log(`discover batch returned no JSON: ${String(result).slice(0, 200)}`);
+  return (leads || []).map((l) => Object.fromEntries(Object.entries(l).map(([k, v]) => [k, unescape(v)])));
 }
 
 async function campaignNamed(pool, name) {
@@ -147,7 +161,7 @@ Return ONLY JSON {"type":"","about":""}. "type" is a few words (e.g. "Italian re
 "about" is 2-4 short factual sentences a cleaning company would want before calling: what the place
 is, who owns/runs it if published, rough size, opening hours or busiest times, and anything like
 events, a function room or a big kitchen. Only facts you actually found.`,
-    '--model', DISCOVER_MODEL, '--max-turns', '10'], { timeout: 8 * 60_000, maxBuffer: 4 << 20 });
+    '--model', DISCOVER_MODEL, '--max-turns', '10'], { timeout: 8 * 60_000, maxBuffer: 4 << 20, label: `profile ${c.business}` });
   let text = stdout;
   try { text = JSON.parse(stdout).result ?? stdout; } catch { /* raw text */ }
   const o = JSON.parse(String(text).match(/\{[\s\S]*\}/)[0]);
@@ -194,8 +208,12 @@ async function main() {
 
   while (inserted < TARGET && empty < MAX_EMPTY && new Date() < deadline) {
     // ponytail: skip-list is every business name in the area we hold; trim if it ever blows the prompt size
+    // address alone misses towns inside a borough (Tameside's leads say Hyde, Ashton...), so also everyone already
+    // in one of this area's campaigns — otherwise the AI re-finds them and the batch is wasted on duplicates
     const { rows: known } = await pool.query(
-      `select business from contacts where business is not null and address ilike $1`, [`%${BOROUGH}%`]
+      `select distinct business from contacts c where business is not null and (address ilike $1
+         or exists (select 1 from enrollments e join campaigns k on k.id = e.campaign_id where e.contact_id = c.id and k.name like $2))`,
+      [`%${BOROUGH}%`, `${BOROUGH} — %`]
     );
     let leads;
     try {
@@ -209,11 +227,13 @@ async function main() {
     }
 
     let newThisBatch = 0;
+    const drop = { noEmail: 0, suppressed: 0, undeliverable: 0, duplicate: 0 };
     for (const l of leads) {
-      if (!l.email || inserted >= TARGET) continue;
+      if (inserted >= TARGET) continue;
+      if (!l.email) { drop.noEmail++; continue; }
       const { rows: [sup] } = await pool.query(`select 1 from suppression where lower(email) = lower($1)`, [l.email]);
-      if (sup) continue;
-      if (await rejectIfUndeliverable(pool, l.email)) continue;
+      if (sup) { drop.suppressed++; continue; }
+      if (await rejectIfUndeliverable(pool, l.email)) { drop.undeliverable++; continue; }
 
       const { rows } = await pool.query(
         `insert into contacts (business, contact_name, email, phone, address, website, notes, source)
@@ -223,7 +243,7 @@ async function main() {
          [l.type, l.about].filter(Boolean).join('\n\n')]
       );
       const contact = rows[0];
-      if (!contact) continue;
+      if (!contact) { drop.duplicate++; console.log(`duplicate: ${l.business} <${l.email}>`); continue; }
       inserted++; newThisBatch++;
 
       let body;
@@ -238,7 +258,7 @@ async function main() {
       await addDraft(pool, campaignId, contact, body);
     }
     empty = newThisBatch ? 0 : empty + 1;
-    console.log(`discover ${BOROUGH}: batch +${newThisBatch} (${inserted}/${TARGET} so far)`);
+    console.log(`discover ${BOROUGH}: batch +${newThisBatch} of ${leads.length} returned, dropped ${JSON.stringify(drop)} (${inserted}/${TARGET} so far)`);
   }
 
   console.log(`discover ${BOROUGH}: ${inserted} new leads drafted (${aiDrafted} AI-researched)` +
