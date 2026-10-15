@@ -152,6 +152,14 @@ async function rejectIfUndeliverable(pool, email, contactId = null) {
   return true;
 }
 
+// The writer decided not to email it (closed, moved...): lost + suppressed so it's never found or drafted again.
+async function skipLead(pool, contact, email, reason) {
+  await pool.query(`update contacts set pipeline_stage = 'lost' where id = $1`, [contact.id]);
+  await pool.query(`insert into suppression (email, reason) values (lower($1), $2) on conflict do nothing`, [email, `not emailed: ${reason}`.slice(0, 500)]);
+  await pool.query(`insert into events (contact_id, type, body) values ($1,'note',$2)`, [contact.id, `Not emailed — ${reason}`]);
+  console.log(`not drafted ${contact.business}: ${reason}`);
+}
+
 async function profileFor(c) {
   const { stdout } = await claude(['-p', `Look up this UK business on its website and the web:
 ${c.business}${c.website ? ` — ${c.website}` : ''}${c.address ? ` — ${c.address}` : ''}
@@ -189,6 +197,7 @@ async function draftManualLeads(pool) {
     let body;
     try { body = ensureSignature(await draftEmailAI(c)); }
     catch (err) {
+      if (err.skip) { await skipLead(pool, c, c.email, err.skip); continue; }
       console.error(`draft failed for ${c.business}, using template:`, err.message || err);
       body = ensureSignature(bodyFor(c));
     }
@@ -273,6 +282,7 @@ async function main() {
       body = ensureSignature(await draftEmailAI(l));
       aiDrafted++;
     } catch (err) {
+      if (err.skip) { await skipLead(pool, contact, l.email, err.skip); return 'notDrafted'; }
       console.error(`draft failed for ${contact.business}, using template:`, err.message || err);
       body = ensureSignature(bodyFor(contact));
     }
@@ -280,7 +290,7 @@ async function main() {
     inserted++;
     return 'added';
   }
-  const tally = () => ({ added: 0, duplicate: 0, noEmail: 0, suppressed: 0, undeliverable: 0 });
+  const tally = () => ({ added: 0, duplicate: 0, noEmail: 0, suppressed: 0, undeliverable: 0, notDrafted: 0 });
 
   // 1. OpenStreetMap: hospitality and offices interleaved, ones with an email tag first (no fetch needed)
   const names = new Set((await knownNames()).map((n) => n.toLowerCase()));
