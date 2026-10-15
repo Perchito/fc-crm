@@ -80,9 +80,13 @@ Return ONLY a JSON array (no prose), each item:
 {"business":"","type":"","about":"","email":"","phone":"","address":"","website":""}`;
 
 function extractJson(text) {
-  const m = String(text || '').match(/\[[\s\S]*\]/);
-  if (!m) return null;
-  try { return JSON.parse(m[0]); } catch { return null; }
+  const t = String(text || '');
+  const start = t.indexOf('[');
+  if (start === -1) return null;
+  const body = t.slice(start, t.lastIndexOf(']') + 1 || undefined);
+  try { return JSON.parse(body); } catch { /* cut off or trailing junk: keep the complete items */ }
+  const cut = t.slice(start, t.lastIndexOf('}') + 1);
+  try { return JSON.parse(`${cut}]`); } catch { return null; }
 }
 
 // web pages give us "Wine &amp; Dine"
@@ -217,7 +221,9 @@ const nice = (v) => String(v || '').replace(/_/g, ' ').replace(/;/g, ', ');
 async function osmCandidates() {
   const area = BOROUGH.replace(/"/g, '');
   const q = `[out:json][timeout:90];area["name"="${area}"]["boundary"="administrative"]->.a;(nwr(area.a)["amenity"~"^(restaurant|cafe|bar|pub)$"]["name"];nwr(area.a)["office"~"^(${OSM_OFFICES})$"]["name"];);out tags center;`;
-  for (const url of OVERPASS) {
+  // the public servers are often at capacity (504): a few rounds a minute apart before falling back to the AI
+  for (let round = 0; round < 3; round++) for (const url of OVERPASS) {
+    if (round && url === OVERPASS[0]) await sleep(60_000);
     try {
       const r = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: q }), signal: AbortSignal.timeout(120_000),
         headers: { 'User-Agent': 'fc-crm/1.0 (lead research; fernando.c@fccleaningcompany.com)' } });
@@ -234,7 +240,7 @@ async function osmCandidates() {
           address: address.toLowerCase().includes(area.toLowerCase()) ? address : [address, area].filter(Boolean).join(', '),
           website: t.website || t['contact:website'] || '' };
       }).filter((l) => l.email || l.website);
-    } catch (err) { console.error(`overpass ${url} failed: ${err.message}`); }
+    } catch (err) { console.error(`overpass ${url} failed (round ${round + 1}): ${err.message}`); }
   }
   return [];
 }
@@ -332,4 +338,14 @@ async function main() {
   await pool.end();
 }
 
-main().catch((err) => { console.error('discover failed:', err.message || err); process.exit(1); });
+if (!process.argv.includes('--check')) main().catch((err) => { console.error('discover failed:', err.message || err); process.exit(1); });
+
+// node worker/discover.mjs --check — JSON salvage self-check (no DB, no network)
+if (process.argv.includes('--check')) {
+  const { strict: assert } = await import('node:assert');
+  assert.equal(extractJson('```json\n[{"a":1},{"a":2}]\n```').length, 2);
+  assert.equal(extractJson('[{"a":1},{"a":2},{"a":').length, 2);
+  assert.equal(extractJson('no list here'), null);
+  console.log('discover ok');
+  process.exit(0);
+}
