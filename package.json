@@ -7,7 +7,7 @@
     "start": "node server.mjs",
     "dev": "node server.mjs",
     "migrate": "node db/migrate.mjs",
-    "check": "for f in pricing pdf auth biz documents contracts docuseal customers invoices siteEmail; do node lib/$f.mjs || exit 1; done",
+    "check": "for f in pricing pdf auth biz documents contracts docuseal customers invoices siteEmail aiDraft; do node lib/$f.mjs || exit 1; done",
     "test": "npm run check && node --test --test-concurrency=1 test/*.test.mjs"
   },
   "dependencies": {
