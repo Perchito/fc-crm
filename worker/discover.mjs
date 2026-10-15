@@ -34,6 +34,7 @@ import { ensureSignature, withSignature } from '../lib/signature.mjs';
 import { subjectFor, bodyFor, FOLLOW_UP } from '../lib/leadTemplate.mjs';
 import { draftEmailAI, claude } from '../lib/aiDraft.mjs';
 import { checkEmail } from '../lib/emailCheck.mjs';
+import { findSiteEmail } from '../lib/siteEmail.mjs';
 import { BOOK_URL } from '../lib/booking.mjs';
 
 const { DATABASE_URL } = process.env;
@@ -43,10 +44,10 @@ const BOROUGHS = ['Manchester', 'Salford', 'Trafford', 'Stockport', 'Tameside', 
 const day = Math.floor(Date.now() / 86_400_000);
 const BOROUGH = process.env.DISCOVER_AREA || BOROUGHS[day % BOROUGHS.length];
 const TARGET = Number(process.env.DISCOVER_TARGET || 20);
-// Small batches on Sonnet with a turn cap: a 10-venue Opus batch ran 150-250
-// turns with every fetched page re-read each turn (10-25M cached tokens a
-// batch) and emptied the 5-hour usage window after ~10 leads (2026-10-09).
-const BATCH = 5;
+// Sonnet, search-only listing calls with a low turn cap: a 10-venue Opus batch that fetched pages itself ran
+// 150-250 turns (10-25M cached tokens) and emptied the 5-hour usage window (2026-10-09); a 5-venue Sonnet one
+// still cost ~$1 for 0-3 leads (2026-10-15).
+const BATCH = 15;
 const DISCOVER_MODEL = process.env.DISCOVER_MODEL || 'sonnet';
 const DEADLINE_HOUR = Number(process.env.DISCOVER_DEADLINE_HOUR || 7);
 const MAX_EMPTY = 3; // consecutive batches with no new leads = the area's dried up
@@ -55,31 +56,26 @@ const deadline = new Date();
 deadline.setHours(DEADLINE_HOUR, 0, 0, 0);
 if (deadline <= new Date()) deadline.setDate(deadline.getDate() + 1); // manual daytime run: give it until tomorrow 07:00
 
-const promptFor = (skip) => `Find ${BATCH} independent, family-owned or owner-operated bars, restaurants and
-cafés in or near ${BOROUGH}${BOROUGHS.includes(BOROUGH) ? ', Greater Manchester' : ''}, UK.
+// Alternates per batch. Luis (2026-10-15): chains are fine now, and offices are in alongside hospitality.
+const SECTORS = [
+  { key: 'hospitality', what: 'bars, pubs, restaurants and cafés', eg: '"Italian restaurant", "Real-ale pub", "Café"' },
+  { key: 'office', what: 'businesses that work from their own office premises — e.g. accountants, solicitors, estate and letting agents, recruitment agencies, marketing and design agencies, architects, IT and tech firms, insurance brokers, coworking spaces',
+    eg: '"Accountants", "Solicitors", "Recruitment agency"' },
+];
 
-ONLY include a venue that is genuinely independent — a single site, or at most 2-3 sites run by
-the same named owner(s). EXCLUDE: national or regional chains, franchises, pub companies /
-breweries that own the pub (a free house is fine), hotel groups, restaurant groups of 4+ sites,
-and anything run by a larger parent company or head office. A family who owns and runs the place
-themselves is exactly who we want — they decide on a cleaning contractor themselves, not a head
-office. When in doubt, check the venue's own site or Companies House for how many sites / who
-owns it, and leave it out if it looks corporate.
+// The AI only lists candidates from search results (cheap: no page fetching, few turns). Code then reads each
+// website for the email (lib/siteEmail.mjs) — that page-by-page hunt is what cost ~$1 a batch when Claude did it.
+const promptFor = (sector, skip) => `Using web search only, list up to ${BATCH} ${sector.what} in or near
+${BOROUGH}${BOROUGHS.includes(BOROUGH) ? ', Greater Manchester' : ''}, UK. Prefer ones with their own website.
 ${skip.length ? `\nWe already have these — do NOT return any of them:\n${skip.join('; ')}\n` : ''}
-For each kept venue, search the web and only include ones where you find a real published
-contact email (a mailto: link or an address shown on a Contact/About page) — never invent one.
-
-Be economical: about 25 searches/fetches in total. Fetch only a venue's own Contact/About page,
-not menus or galleries. If a venue has no email after one or two looks, drop it and move on.
-Returning fewer than ${BATCH} is fine.
-
-"type" is a few words (e.g. "Italian restaurant", "Real-ale pub", "Independent café"). "about" is
-2-4 short factual sentences a cleaning company would want before calling: what the place is, who
-owns/runs it if published, rough size (covers/rooms/floors), opening hours or busiest times, and
-anything like events, a function room or a big kitchen. Only facts you actually found.
+Do not open or fetch any pages: work only from search results, a handful of searches in total.
+"website" is the business's own site (not Facebook, TripAdvisor, Google or a directory); leave it "" if
+you didn't see one. "email" only if you saw the address written in a search result, else "" — never guess
+one. "type" is a few words (e.g. ${sector.eg}). "about" is 1-2 short factual sentences from the search
+results (what it is, size or anything notable). Only facts you saw.
 
 Return ONLY a JSON array (no prose), each item:
-{"business":"","type":"","about":"","email":"","contactName":null,"phone":"","address":"","website":""}`;
+{"business":"","type":"","about":"","email":"","phone":"","address":"","website":""}`;
 
 function extractJson(text) {
   const m = String(text || '').match(/\[[\s\S]*\]/);
@@ -91,13 +87,14 @@ function extractJson(text) {
 const unescape = (v) => typeof v !== 'string' ? v : v.replace(/&(amp|quot|#39|apos|lt|gt|#(\d+));/g, (_, e, n) =>
   n ? String.fromCharCode(+n) : { amp: '&', quot: '"', '#39': "'", apos: "'", lt: '<', gt: '>' }[e]);
 
-async function findLeads(skip) {
+async function findLeads(sector, skip) {
   let stdout;
   try {
-    ({ stdout } = await claude(['-p', promptFor(skip), '--model', DISCOVER_MODEL, '--max-turns', '40'], {
+    ({ stdout } = await claude(['-p', promptFor(sector, skip), '--model', DISCOVER_MODEL, '--max-turns', '12'], {
+      tools: 'WebSearch',
       timeout: 10 * 60_000,
       maxBuffer: 8 * 1024 * 1024,
-      label: `discover batch ${BOROUGH}`,
+      label: `discover ${sector.key} ${BOROUGH}`,
     }));
   } catch (err) {
     // the CLI sometimes exits non-zero after a finished answer: keep the answer rather than retrying a $1 batch
@@ -108,7 +105,7 @@ async function findLeads(skip) {
   try { result = JSON.parse(stdout).result ?? stdout; } catch { /* raw text */ }
   const leads = extractJson(result);
   if (!leads) console.log(`discover batch returned no JSON: ${String(result).slice(0, 200)}`);
-  return (leads || []).map((l) => Object.fromEntries(Object.entries(l).map(([k, v]) => [k, unescape(v)])));
+  return (leads || []).map((l) => ({ ...Object.fromEntries(Object.entries(l).map(([k, v]) => [k, unescape(v)])), sector: sector.key }));
 }
 
 async function campaignNamed(pool, name) {
@@ -154,7 +151,7 @@ async function rejectIfUndeliverable(pool, email, contactId = null) {
 }
 
 async function profileFor(c) {
-  const { stdout } = await claude(['-p', `Look up this UK hospitality business on its website and the web:
+  const { stdout } = await claude(['-p', `Look up this UK business on its website and the web:
 ${c.business}${c.website ? ` — ${c.website}` : ''}${c.address ? ` — ${c.address}` : ''}
 
 Return ONLY JSON {"type":"","about":""}. "type" is a few words (e.g. "Italian restaurant").
@@ -204,7 +201,7 @@ async function main() {
   await draftManualLeads(pool);
   const campaignId = await campaignNamed(pool,
     `${BOROUGH} — ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`);
-  let inserted = 0, aiDrafted = 0, empty = 0;
+  let inserted = 0, aiDrafted = 0, empty = 0, batchNo = 0;
 
   while (inserted < TARGET && empty < MAX_EMPTY && new Date() < deadline) {
     // ponytail: skip-list is every business name in the area we hold; trim if it ever blows the prompt size
@@ -215,9 +212,13 @@ async function main() {
          or exists (select 1 from enrollments e join campaigns k on k.id = e.campaign_id where e.contact_id = c.id and k.name like $2))`,
       [`%${BOROUGH}%`, `${BOROUGH} — %`]
     );
+    const sector = SECTORS[batchNo++ % SECTORS.length];
+    // websites we already hold anywhere: dropped before any fetching or drafting
+    const { rows: hosts } = await pool.query(`select distinct lower(regexp_replace(website, '^(https?://)?(www\\.)?([^/]+).*$', '\\3')) h from contacts where website is not null`);
+    const knownHosts = new Set(hosts.map((r) => r.h));
     let leads;
     try {
-      leads = await findLeads(known.map((r) => r.business));
+      leads = await findLeads(sector, known.map((r) => r.business));
     } catch (err) {
       if (/error_max_turns/.test(err.stdout)) { console.error('discover batch hit the turn cap, next batch'); empty++; continue; }
       // most likely the Claude usage limit — wait for it to reset rather than giving up the night
@@ -228,8 +229,14 @@ async function main() {
 
     let newThisBatch = 0;
     const drop = { noEmail: 0, suppressed: 0, undeliverable: 0, duplicate: 0 };
+    let fromSite = 0;
     for (const l of leads) {
       if (inserted >= TARGET) continue;
+      const host = String(l.website || '').toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
+      if (host && knownHosts.has(host)) { drop.duplicate++; continue; }
+      // the site's own published address beats one seen in a search snippet
+      const onSite = await findSiteEmail(l.website);
+      if (onSite) { l.email = onSite; fromSite++; }
       if (!l.email) { drop.noEmail++; continue; }
       const { rows: [sup] } = await pool.query(`select 1 from suppression where lower(email) = lower($1)`, [l.email]);
       if (sup) { drop.suppressed++; continue; }
@@ -258,7 +265,7 @@ async function main() {
       await addDraft(pool, campaignId, contact, body);
     }
     empty = newThisBatch ? 0 : empty + 1;
-    console.log(`discover ${BOROUGH}: batch +${newThisBatch} of ${leads.length} returned, dropped ${JSON.stringify(drop)} (${inserted}/${TARGET} so far)`);
+    console.log(`discover ${BOROUGH} ${sector.key}: batch +${newThisBatch} of ${leads.length} returned (${fromSite} emails from websites), dropped ${JSON.stringify(drop)} (${inserted}/${TARGET} so far)`);
   }
 
   console.log(`discover ${BOROUGH}: ${inserted} new leads drafted (${aiDrafted} AI-researched)` +
