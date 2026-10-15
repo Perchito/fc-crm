@@ -10,8 +10,9 @@
 // drafting call fails, so one bad draft never blocks the batch — same "queue
 // is never blocked" principle as fc-outreach's queue.js.
 //
-// Hospitality-only, independent/family-owned only (Luis: they decide on a
-// cleaning contractor themselves — a chain's head office doesn't).
+// Hospitality and offices, chains included (Luis, 2026-10-15; was independent hospitality only).
+// Candidates come from OpenStreetMap first (free), then AI search listings; code reads each website
+// for the email, so tokens go almost entirely on the drafts.
 //
 // Nightly (fc-crm-discover.timer, 01:00): one Greater Manchester borough per
 // day, rotating. Keeps running batches until DISCOVER_TARGET new leads or the
@@ -63,12 +64,13 @@ const SECTORS = [
     eg: '"Accountants", "Solicitors", "Recruitment agency"' },
 ];
 
-// The AI only lists candidates from search results (cheap: no page fetching, few turns). Code then reads each
+// The AI only lists candidates from search results (no page fetching; each search is a Haiku call, ~$0.04). Code then reads each
 // website for the email (lib/siteEmail.mjs) — that page-by-page hunt is what cost ~$1 a batch when Claude did it.
 const promptFor = (sector, skip) => `Using web search only, list up to ${BATCH} ${sector.what} in or near
 ${BOROUGH}${BOROUGHS.includes(BOROUGH) ? ', Greater Manchester' : ''}, UK. Prefer ones with their own website.
 ${skip.length ? `\nWe already have these — do NOT return any of them:\n${skip.join('; ')}\n` : ''}
-Do not open or fetch any pages: work only from search results, a handful of searches in total.
+Do not open or fetch any pages: work only from search results. Use at most 6 searches, then reply
+straight away with the JSON.
 "website" is the business's own site (not Facebook, TripAdvisor, Google or a directory); leave it "" if
 you didn't see one. "email" only if you saw the address written in a search result, else "" — never guess
 one. "type" is a few words (e.g. ${sector.eg}). "about" is 1-2 short factual sentences from the search
@@ -90,7 +92,7 @@ const unescape = (v) => typeof v !== 'string' ? v : v.replace(/&(amp|quot|#39|ap
 async function findLeads(sector, skip) {
   let stdout;
   try {
-    ({ stdout } = await claude(['-p', promptFor(sector, skip), '--model', DISCOVER_MODEL, '--max-turns', '12'], {
+    ({ stdout } = await claude(['-p', promptFor(sector, skip), '--model', DISCOVER_MODEL, '--max-turns', '20'], {
       tools: 'WebSearch',
       timeout: 10 * 60_000,
       maxBuffer: 8 * 1024 * 1024,
@@ -196,6 +198,38 @@ async function draftManualLeads(pool) {
   console.log(`manual leads: ${drafted}/${rows.length} drafted`);
 }
 
+// OpenStreetMap lists the area's venues and offices for free (no tokens), many with a website or email already
+// tagged: that's the first source; the AI listing (findLeads) only runs once it's used up.
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter'];
+const OSM_OFFICES = 'accountant|lawyer|estate_agent|employment_agency|insurance|architect|it|company|financial|advertising_agency|coworking|consulting|property_management|tax_advisor';
+const nice = (v) => String(v || '').replace(/_/g, ' ').replace(/;/g, ', ');
+
+async function osmCandidates() {
+  const area = BOROUGH.replace(/"/g, '');
+  const q = `[out:json][timeout:90];area["name"="${area}"]["boundary"="administrative"]->.a;(nwr(area.a)["amenity"~"^(restaurant|cafe|bar|pub)$"]["name"];nwr(area.a)["office"~"^(${OSM_OFFICES})$"]["name"];);out tags center;`;
+  for (const url of OVERPASS) {
+    try {
+      const r = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: q }), signal: AbortSignal.timeout(120_000),
+        headers: { 'User-Agent': 'fc-crm/1.0 (lead research; fernando.c@fccleaningcompany.com)' } });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const { elements } = await r.json();
+      const uk = (e) => { const c = e.center || e; return c.lat > 49.8 && c.lat < 60.9 && c.lon > -8.7 && c.lon < 1.8; }; // same-named places abroad
+      return elements.filter(uk).map(({ tags: t }) => {
+        const office = !t.amenity;
+        const address = [[t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' '), t['addr:city'] || t['addr:town'] || t['addr:suburb'], t['addr:postcode']].filter(Boolean).join(', ');
+        return { business: t.name, sector: office ? 'office' : 'hospitality',
+          type: office ? nice(t.office === 'company' ? 'office' : t.office) : [nice(t.cuisine), nice(t.amenity)].filter(Boolean).join(' '),
+          about: [t.brand && `Part of ${t.brand}.`, t.opening_hours && `Opening hours: ${t.opening_hours}.`].filter(Boolean).join(' '),
+          email: t.email || t['contact:email'] || '', phone: t.phone || t['contact:phone'] || '',
+          address: address.toLowerCase().includes(area.toLowerCase()) ? address : [address, area].filter(Boolean).join(', '),
+          website: t.website || t['contact:website'] || '' };
+      }).filter((l) => l.email || l.website);
+    } catch (err) { console.error(`overpass ${url} failed: ${err.message}`); }
+  }
+  return [];
+}
+
 async function main() {
   const pool = new pg.Pool({ connectionString: DATABASE_URL });
   await draftManualLeads(pool);
@@ -203,22 +237,70 @@ async function main() {
     `${BOROUGH} — ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`);
   let inserted = 0, aiDrafted = 0, empty = 0, batchNo = 0;
 
-  while (inserted < TARGET && empty < MAX_EMPTY && new Date() < deadline) {
-    // ponytail: skip-list is every business name in the area we hold; trim if it ever blows the prompt size
-    // address alone misses towns inside a borough (Tameside's leads say Hyde, Ashton...), so also everyone already
-    // in one of this area's campaigns — otherwise the AI re-finds them and the batch is wasted on duplicates
-    const { rows: known } = await pool.query(
-      `select distinct business from contacts c where business is not null and (address ilike $1
-         or exists (select 1 from enrollments e join campaigns k on k.id = e.campaign_id where e.contact_id = c.id and k.name like $2))`,
-      [`%${BOROUGH}%`, `${BOROUGH} — %`]
+  // ponytail: skip-list is every business name in the area we hold; trim if it ever blows the prompt size
+  // address alone misses towns inside a borough (Tameside's leads say Hyde, Ashton...), so also everyone already
+  // in one of this area's campaigns — otherwise the AI re-finds them and the batch is wasted on duplicates
+  const knownNames = async () => (await pool.query(
+    `select distinct business from contacts c where business is not null and (address ilike $1
+       or exists (select 1 from enrollments e join campaigns k on k.id = e.campaign_id where e.contact_id = c.id and k.name like $2))`,
+    [`%${BOROUGH}%`, `${BOROUGH} — %`])).rows.map((r) => r.business);
+  // websites we already hold anywhere: dropped before any fetching or drafting
+  const knownHosts = new Set((await pool.query(`select distinct lower(regexp_replace(website, '^(https?://)?(www\\.)?([^/]+).*$', '\\3')) h from contacts where website is not null`)).rows.map((r) => r.h));
+  const hostOf = (w) => String(w || '').toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
+
+  // one candidate → a drafted lead, or the reason it was dropped. Tokens are only spent on the draft.
+  async function tryLead(l) {
+    const host = hostOf(l.website);
+    if (host && knownHosts.has(host)) return 'duplicate';
+    // the site's own published address beats one from a listing or search snippet
+    const onSite = await findSiteEmail(l.website);
+    if (onSite) l.email = onSite;
+    if (!l.email) return 'noEmail';
+    const { rows: [sup] } = await pool.query(`select 1 from suppression where lower(email) = lower($1)`, [l.email]);
+    if (sup) return 'suppressed';
+    if (await rejectIfUndeliverable(pool, l.email)) return 'undeliverable';
+    const { rows: [contact] } = await pool.query(
+      `insert into contacts (business, contact_name, email, phone, address, website, notes, source)
+       values ($1,$2,$3,$4,$5,$6,$7,'ai-discover')
+       on conflict do nothing returning id, business, booking_token`,
+      [l.business || null, l.contactName || null, l.email, l.phone || null, l.address || null, l.website || null,
+       [l.type, l.about].filter(Boolean).join('\n\n')]
     );
+    if (!contact) return 'duplicate';
+    if (host) knownHosts.add(host);
+    let body;
+    try {
+      body = ensureSignature(await draftEmailAI(l));
+      aiDrafted++;
+    } catch (err) {
+      console.error(`draft failed for ${contact.business}, using template:`, err.message || err);
+      body = ensureSignature(bodyFor(contact));
+    }
+    await addDraft(pool, campaignId, contact, body);
+    inserted++;
+    return 'added';
+  }
+  const tally = () => ({ added: 0, duplicate: 0, noEmail: 0, suppressed: 0, undeliverable: 0 });
+
+  // 1. OpenStreetMap: hospitality and offices interleaved, ones with an email tag first (no fetch needed)
+  const names = new Set((await knownNames()).map((n) => n.toLowerCase()));
+  const osm = (await osmCandidates()).filter((l) => !names.has(l.business.toLowerCase()));
+  const bySector = (k) => osm.filter((l) => l.sector === k).sort((a, b) => !!b.email - !!a.email);
+  const [h, o] = [bySector('hospitality'), bySector('office')];
+  const queue = Array.from({ length: Math.max(h.length, o.length) }, (_, i) => [h[i], o[i]]).flat().filter(Boolean);
+  const t = tally();
+  for (const l of queue) {
+    if (inserted >= TARGET || new Date() >= deadline) break;
+    t[await tryLead(l)]++;
+  }
+  console.log(`discover ${BOROUGH} openstreetmap: ${osm.length} new candidates, ${JSON.stringify(t)} (${inserted}/${TARGET} so far)`);
+
+  // 2. only if the map ran out: AI listing batches (search results only), code still finds the emails
+  while (inserted < TARGET && empty < MAX_EMPTY && new Date() < deadline) {
     const sector = SECTORS[batchNo++ % SECTORS.length];
-    // websites we already hold anywhere: dropped before any fetching or drafting
-    const { rows: hosts } = await pool.query(`select distinct lower(regexp_replace(website, '^(https?://)?(www\\.)?([^/]+).*$', '\\3')) h from contacts where website is not null`);
-    const knownHosts = new Set(hosts.map((r) => r.h));
     let leads;
     try {
-      leads = await findLeads(sector, known.map((r) => r.business));
+      leads = await findLeads(sector, await knownNames());
     } catch (err) {
       if (/error_max_turns/.test(err.stdout)) { console.error('discover batch hit the turn cap, next batch'); empty++; continue; }
       // most likely the Claude usage limit — wait for it to reset rather than giving up the night
@@ -226,46 +308,13 @@ async function main() {
       await sleep(20 * 60_000);
       continue;
     }
-
-    let newThisBatch = 0;
-    const drop = { noEmail: 0, suppressed: 0, undeliverable: 0, duplicate: 0 };
-    let fromSite = 0;
+    const b = tally();
     for (const l of leads) {
-      if (inserted >= TARGET) continue;
-      const host = String(l.website || '').toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
-      if (host && knownHosts.has(host)) { drop.duplicate++; continue; }
-      // the site's own published address beats one seen in a search snippet
-      const onSite = await findSiteEmail(l.website);
-      if (onSite) { l.email = onSite; fromSite++; }
-      if (!l.email) { drop.noEmail++; continue; }
-      const { rows: [sup] } = await pool.query(`select 1 from suppression where lower(email) = lower($1)`, [l.email]);
-      if (sup) { drop.suppressed++; continue; }
-      if (await rejectIfUndeliverable(pool, l.email)) { drop.undeliverable++; continue; }
-
-      const { rows } = await pool.query(
-        `insert into contacts (business, contact_name, email, phone, address, website, notes, source)
-         values ($1,$2,$3,$4,$5,$6,$7,'ai-discover')
-         on conflict do nothing returning id, business, booking_token`,
-        [l.business || null, l.contactName || null, l.email, l.phone || null, l.address || null, l.website || null,
-         [l.type, l.about].filter(Boolean).join('\n\n')]
-      );
-      const contact = rows[0];
-      if (!contact) { drop.duplicate++; console.log(`duplicate: ${l.business} <${l.email}>`); continue; }
-      inserted++; newThisBatch++;
-
-      let body;
-      try {
-        body = ensureSignature(await draftEmailAI(l));
-        aiDrafted++;
-      } catch (err) {
-        console.error(`draft failed for ${contact.business}, using template:`, err.message || err);
-        body = ensureSignature(bodyFor(contact));
-      }
-
-      await addDraft(pool, campaignId, contact, body);
+      if (inserted >= TARGET) break;
+      b[await tryLead(l)]++;
     }
-    empty = newThisBatch ? 0 : empty + 1;
-    console.log(`discover ${BOROUGH} ${sector.key}: batch +${newThisBatch} of ${leads.length} returned (${fromSite} emails from websites), dropped ${JSON.stringify(drop)} (${inserted}/${TARGET} so far)`);
+    empty = b.added ? 0 : empty + 1;
+    console.log(`discover ${BOROUGH} ${sector.key}: AI listed ${leads.length}, ${JSON.stringify(b)} (${inserted}/${TARGET} so far)`);
   }
 
   console.log(`discover ${BOROUGH}: ${inserted} new leads drafted (${aiDrafted} AI-researched)` +
