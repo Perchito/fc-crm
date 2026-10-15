@@ -210,12 +210,14 @@ async function renderInvoices(section, contact = null) {
   const active = customers.filter((c) => !c.archived_at && (['quoted', 'won'].includes(c.pipeline_stage) || invoiced.has(c.id) || c.id === contact?.id)).sort((a, b) => String(a.business || a.contact_name || '').localeCompare(String(b.business || b.contact_name || '')));
   const outstanding = invoices.filter((i) => ['issued', 'part_paid'].includes(i.status)).reduce((s, i) => s + Number(i.balance_pence), 0);
   const overdue = (i) => ['issued', 'part_paid'].includes(i.status) && String(i.due_date).slice(0, 10) < isoDay();
-  // mirrors sendDueReminders: auto reminder 3 days before due, unless issued inside that window
-  const reminderDue = (i) => { if (!['issued', 'part_paid'].includes(i.status)) return null; const d = new Date(`${String(i.due_date).slice(0, 10)}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - 3); const r = d.toISOString().slice(0, 10); return r > String(i.issue_date).slice(0, 10) && r >= isoDay() ? r : null; };
+  // mirrors CHASE in lib/invoices.mjs: next automatic reminder (days from the due date), never on/before the issue day
+  const reminderDue = (i) => { if (!['issued', 'part_paid'].includes(i.status)) return null; const today = isoDay(), last = i.last_reminder_at ? isoDay(i.last_reminder_at) : '';
+    return [-3, 0, 3, 7, 14].map((n) => { const d = new Date(`${String(i.due_date).slice(0, 10)}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); })
+      .find((d) => d >= today && d > String(i.issue_date).slice(0, 10) && d > last) || null; };
   const card = (i) => `<article class="inv-card" data-q="${esc(`${i.number} ${i.business || ''}`.toLowerCase())}" data-status="${esc(i.status)}">
       <div class="inv-top"><b class="inv-no">${esc(i.number)}</b>${badge(i.status)}${overdue(i) ? '<span class="badge b-expired">Overdue</span>' : ''}</div>
       <div class="inv-cust">${esc(i.business || '—')}</div>
-      <div class="inv-meta"><span>${i.status === 'draft' ? 'Dated' : 'Issued'} ${fmtDate(i.issue_date)}</span><span class="${overdue(i) ? 'inv-late' : ''}">${dueText(i)}</span>${i.emailed_at ? `<span>Emailed ${fmtDate(i.emailed_at)}</span>` : ''}${i.last_reminder_at ? `<span>Reminder sent ${fmtDate(i.last_reminder_at)}</span>` : reminderDue(i) ? `<span>Reminder ${fmtDate(reminderDue(i))}</span>` : ''}</div>
+      <div class="inv-meta"><span>${i.status === 'draft' ? 'Dated' : 'Issued'} ${fmtDate(i.issue_date)}</span><span class="${overdue(i) ? 'inv-late' : ''}">${dueText(i)}</span>${i.emailed_at ? `<span>Emailed ${fmtDate(i.emailed_at)}</span>` : ''}${i.last_reminder_at ? `<span>Reminder sent ${fmtDate(i.last_reminder_at)}</span>` : ''}${reminderDue(i) ? `<span>Next reminder ${fmtDate(reminderDue(i))}</span>` : ''}</div>
       <div class="inv-money"><div><small>Total</small><b>${money(i.total_pence)}</b></div>${i.status === 'draft' ? '' : `<div><small>Balance</small><b>${money(i.balance_pence)}</b></div>`}</div>
       <div class="inv-actions">
         <button class="btn-secondary btn-sm" data-act="pdf">View PDF</button>
@@ -318,7 +320,7 @@ async function renderInvoices(section, contact = null) {
       if (ok) { toast(ok.emailed_to ? `${i.number} issued and emailed to ${ok.emailed_to}` : `${i.number} issued, but the email failed: ${ok.email_error}`); await renderInvoices(section, contact); }
     }
     if (b.dataset.act === 'email') {
-      const ok = await modal({ title: `Email ${i.number}?`, sub: `Sends the invoice PDF to the customer from invoice@, copying in Fernando.`, submit: 'Email invoice',
+      const ok = await modal({ title: `Email ${i.number}?`, sub: `Sends the invoice PDF to the customer from accounts@, copying in Fernando.`, submit: 'Email invoice',
         onSubmit: async () => api(`/api/invoices/${i.id}/email`, { method: 'POST', body: '{}' }) });
       if (ok) { toast(`${i.number} emailed to ${ok.to}`); await renderInvoices(section, contact); }
     }
