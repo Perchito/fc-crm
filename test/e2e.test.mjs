@@ -417,6 +417,27 @@ test('invoices: draft with VAT, numbering, delete draft, issue, payments, PDF', 
   assert.equal(back.status, 'issued'); assert.equal(back.payments.length, 0);
 });
 
+test('areas: Manchester and London are kept apart, All shows both, booking diaries are separate', async () => {
+  const L = { headers: { 'X-FC-Area': 'london' } }, M = { headers: { 'X-FC-Area': 'manchester' } };
+  const lon = await admin.call('POST', '/api/contacts', { business: 'Area Test Soho Café', email: 'soho-area@example.com' }, L);
+  assert.equal(lon.status, 201); assert.equal(lon.data.area, 'london');
+  const ids = async (o) => (await admin.get('/api/contacts?q=area test', o)).data.map((c) => c.id);
+  assert.ok((await ids(L)).includes(lon.data.id));
+  assert.ok(!(await ids(M)).includes(lon.data.id));
+  assert.ok((await ids()).includes(lon.data.id));
+  assert.equal((await admin.call('PATCH', `/api/contacts/${lon.data.id}`, { area: 'leeds' })).status, 400);
+  // a London busy block hides London slots but not Manchester ones
+  const slots = async (area) => (await anon.get(`/api/public/slots?area=${area}`, { csrf: false })).data.days.flatMap((d) => d.slots);
+  const before = await slots('manchester');
+  const from = new Date(Date.now() - 86400_000), to = new Date(Date.now() + 40 * 86400_000);
+  const b = await admin.call('POST', '/api/blocks', { starts_at: from, ends_at: to, title: 'Away' }, L);
+  assert.equal(b.data.area, 'london');
+  assert.equal((await slots('london')).length, 0);
+  assert.deepEqual(await slots('manchester'), before);
+  assert.ok(!(await admin.get(`/api/calendar?from=${from.toISOString()}&to=${to.toISOString()}`, M)).data.blocks.some((x) => x.id === b.data.id));
+  await admin.del(`/api/blocks/${b.data.id}`);
+});
+
 test('logout ends the session', async () => {
   assert.equal((await staff.post('/api/logout')).status, 200);
   assert.equal((await staff.get('/api/contacts')).status, 401);

@@ -502,7 +502,7 @@ async function renderCustomers(el) {
     const rows = await res.json(), total = Number(res.headers.get('X-Total-Count') || rows.length);
     const body = el.querySelector('#c-body');
     body.innerHTML = rows.length ? rows.map((c) => `<tr class="click" data-id="${c.id}" tabindex="0">
-      <td>${esc(c.business || '(no name)')}${c.trading_name ? `<span class="sub">t/a ${esc(c.trading_name)}</span>` : ''}</td>
+      <td>${esc(c.business || '(no name)')}${c.trading_name ? `<span class="sub">t/a ${esc(c.trading_name)}</span>` : ''}${AREA ? '' : `<span class="sub">${esc(AREA_LABEL[c.area] || '')}</span>`}</td>
       <td data-label="Contact">${esc(c.contact_name || '')}<span class="sub">${esc(c.email || '')}</span></td><td data-label="Phone">${esc(c.phone || '')}</td>
       <td>${pill(c.pipeline_stage)}</td><td data-label="Owner">${esc(USERS.find((u) => u.id === c.owner_id)?.name || '')}</td><td data-label="Updated" class="muted">${fmtDate(c.updated_at)}</td></tr>`).join('')
       : `<tr><td colspan="6">${empty(custState.q || custState.stage ? 'No customers match' : 'No customers yet', custState.q || custState.stage ? 'Try a different search or stage.' : 'Add your first customer to get started.')}</td></tr>`;
@@ -534,6 +534,7 @@ const CUSTOMER_FIELDS = (c = {}) => `<div class="fields">
   <div class="wide">${field('Service address', `<input name="address" value="${esc(c.address || '')}">`)}</div>
   ${field('Type of premises', `<input name="premises_type" value="${esc(c.premises_type || '')}" placeholder="Restaurant, pub, office, bakery…">`)}
   ${field('Lead source', `<input name="source" value="${esc(c.source || '')}">`)}
+  ${field('Area', `<select name="area">${Object.entries(AREA_LABEL).map(([v, l]) => `<option value="${v}" ${v === (c.area || AREA || ME?.area || 'manchester') ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
 </div>`;
 async function newCustomer(prefill = {}) {
   let force = false;
@@ -584,7 +585,7 @@ async function renderCustomer(el, id, tab = 'overview') {
     ${c.archived_at ? `<div class="alert alert-warn">This customer was archived on ${fmtDate(c.archived_at)}. <button class="btn-secondary btn-sm" id="p-restore">Restore</button></div>` : ''}
     <div class="profile-head"><div class="row" style="align-items:flex-start;flex-wrap:nowrap"><div class="avatar" aria-hidden="true">${esc((c.business || '?').trim()[0] || '?')}</div><div>
       <h1>${esc(c.business || c.contact_name || 'Customer')}</h1>
-      <div class="meta">${c.contact_name ? `<span>${esc(c.contact_name)}</span>` : ''}${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : ''}${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : ''}${c.address ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}" target="_blank" rel="noopener">${esc(c.address)}</a>` : ''}</div>
+      <div class="meta"><span>${esc(AREA_LABEL[c.area] || '')}</span>${c.contact_name ? `<span>${esc(c.contact_name)}</span>` : ''}${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : ''}${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : ''}${c.address ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}" target="_blank" rel="noopener">${esc(c.address)}</a>` : ''}</div>
     </div></div>
     <div class="row"><select id="p-stage" aria-label="Pipeline stage">${STAGES.map(([v, l]) => `<option value="${v}" ${v === c.pipeline_stage ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <button class="btn-primary" id="p-proposal">+ Proposal</button>
@@ -1554,6 +1555,10 @@ document.getElementById('settings-form').addEventListener('submit', () => setTim
 // ── start ────────────────────────────────────────────────
 (async function init() {
   try { ME = await api('/api/me'); } catch { return; }
+  if (AREA === null) AREA = ME.area || '';
+  const sw = document.getElementById('area-switch');
+  sw.value = AREA;
+  sw.onchange = () => { AREA = sw.value; try { localStorage.setItem('fc-area', AREA); } catch {} route(); refreshNavCount(); };
   USERS = await api('/api/users').then((l) => l.filter((u) => u.active !== false)).catch(() => []);
   document.getElementById('side-user').innerHTML = `<b>${esc(ME.name)}</b><small>${esc(label(ME.role === 'admin' ? 'administrator' : ME.role))}</small><br><button id="logout">Sign out</button>`;
   document.getElementById('logout').onclick = async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); location.href = '/login'; };

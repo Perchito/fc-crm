@@ -25,7 +25,7 @@
 // campaign. Step 1 is FOLLOW_UP: sending the draft schedules it 5 days later, and the
 // engine then sends it automatically (unless the stage has moved on).
 //
-//   DISCOVER_AREA="Bolton" DISCOVER_TARGET=20 node worker/discover.mjs
+//   DISCOVER_CITY=manchester DISCOVER_AREA="Bolton" DISCOVER_TARGET=20 node worker/discover.mjs
 //
 // Requires: `claude` CLI installed and logged in (`claude login`) as this user.
 
@@ -41,9 +41,32 @@ import { BOOK_URL } from '../lib/booking.mjs';
 const { DATABASE_URL } = process.env;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
 
-const BOROUGHS = ['Manchester', 'Salford', 'Trafford', 'Stockport', 'Tameside', 'Oldham', 'Rochdale', 'Bury', 'Bolton', 'Wigan'];
+// Manchester (Fernando) and London (Luis) both run every night (2026-10-16): with no DISCOVER_CITY this
+// process just starts one child per city, side by side, so neither eats the other's night.
+const CITY = process.env.DISCOVER_CITY;
+if (!CITY && !process.argv.includes('--check')) {
+  const { spawn } = await import('node:child_process');
+  const codes = await Promise.all(['manchester', 'london'].map((city) => new Promise((done) =>
+    spawn(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, DISCOVER_CITY: city } }).on('exit', done))));
+  process.exit(codes.some(Boolean) ? 1 : 0);
+}
+// OpenStreetMap boundary names (London's carry "London Borough of" etc.); the short form is what we show and search
+const CITIES = {
+  manchester: { region: 'Greater Manchester', boroughs: ['Manchester', 'Salford', 'Trafford', 'Stockport', 'Tameside', 'Oldham', 'Rochdale', 'Bury', 'Bolton', 'Wigan'] },
+  london: { region: 'London', boroughs: ['City of Westminster', 'Royal Borough of Kensington and Chelsea', 'London Borough of Hammersmith and Fulham',
+    'London Borough of Ealing', 'London Borough of Hounslow', 'London Borough of Richmond upon Thames', 'London Borough of Wandsworth',
+    'London Borough of Camden', 'London Borough of Islington', 'London Borough of Brent', 'London Borough of Lambeth', 'London Borough of Southwark',
+    'London Borough of Hackney', 'London Borough of Tower Hamlets', 'Royal Borough of Kingston upon Thames', 'London Borough of Merton',
+    'London Borough of Hillingdon', 'London Borough of Harrow', 'London Borough of Barnet', 'London Borough of Haringey', 'London Borough of Lewisham',
+    'Royal Borough of Greenwich', 'London Borough of Newham', 'London Borough of Waltham Forest', 'London Borough of Croydon', 'London Borough of Sutton',
+    'London Borough of Bromley', 'London Borough of Enfield', 'London Borough of Redbridge', 'London Borough of Barking and Dagenham',
+    'London Borough of Bexley', 'London Borough of Havering'] },
+}[CITY || 'manchester'];
+if (!CITIES) throw new Error(`DISCOVER_CITY must be manchester or london, not ${CITY}`);
+const AREA = CITY || 'manchester';
 const day = Math.floor(Date.now() / 86_400_000);
-const BOROUGH = process.env.DISCOVER_AREA || BOROUGHS[day % BOROUGHS.length];
+const OSM_NAME = process.env.DISCOVER_AREA || CITIES.boroughs[day % CITIES.boroughs.length];
+const BOROUGH = OSM_NAME.replace(/^(London Borough of|Royal Borough of|City of) /, '');
 const TARGET = Number(process.env.DISCOVER_TARGET || 20);
 // Sonnet, search-only listing calls with a low turn cap: a 10-venue Opus batch that fetched pages itself ran
 // 150-250 turns (10-25M cached tokens) and emptied the 5-hour usage window (2026-10-09); a 5-venue Sonnet one
@@ -67,7 +90,7 @@ const SECTORS = [
 // The AI only lists candidates from search results (no page fetching; each search is a Haiku call, ~$0.04). Code then reads each
 // website for the email (lib/siteEmail.mjs) — that page-by-page hunt is what cost ~$1 a batch when Claude did it.
 const promptFor = (sector, skip) => `Using web search only, list up to ${BATCH} ${sector.what} in or near
-${BOROUGH}${BOROUGHS.includes(BOROUGH) ? ', Greater Manchester' : ''}, UK. Prefer ones with their own website.
+${BOROUGH}, ${CITIES.region}, UK. Prefer ones with their own website.
 ${skip.length ? `\nWe already have these — do NOT return any of them:\n${skip.join('; ')}\n` : ''}
 Do not open or fetch any pages: work only from search results. Use at most 6 searches, then reply
 straight away with the JSON.
@@ -115,9 +138,9 @@ async function findLeads(sector, skip) {
 }
 
 async function campaignNamed(pool, name) {
-  const { rows: [existing] } = await pool.query(`select id from campaigns where name = $1`, [name]);
+  const { rows: [existing] } = await pool.query(`select id from campaigns where name = $1 and area = $2`, [name, AREA]);
   if (existing) return existing.id;
-  const { rows: [c] } = await pool.query(`insert into campaigns (name) values ($1) returning id`, [name]);
+  const { rows: [c] } = await pool.query(`insert into campaigns (name, area) values ($1,$2) returning id`, [name, AREA]);
   await pool.query(
     `insert into campaign_steps (campaign_id, step_index, channel, wait_days, subject_tmpl, body_tmpl) values ($1,1,'email',$2,$3,$4)`,
     [c.id, FOLLOW_UP.wait_days, FOLLOW_UP.subject_tmpl, withSignature(FOLLOW_UP.body_tmpl)]
@@ -185,12 +208,12 @@ events, a function room or a big kitchen. Only facts you actually found.`,
 async function draftManualLeads(pool) {
   const { rows } = await pool.query(`
     select c.* from contacts c
-    where c.source is distinct from 'ai-discover' and c.email is not null and c.pipeline_stage = 'new'
+    where c.area = $1 and c.source is distinct from 'ai-discover' and c.email is not null and c.pipeline_stage = 'new'
       and not exists (select 1 from sends s where s.contact_id = c.id)
       and not exists (select 1 from enrollments e where e.contact_id = c.id)
-      and not exists (select 1 from suppression x where lower(x.email) = lower(c.email))`);
+      and not exists (select 1 from suppression x where lower(x.email) = lower(c.email))`, [AREA]);
   if (!rows.length) return;
-  const campaignId = await campaignNamed(pool, 'Manual leads');
+  const campaignId = await campaignNamed(pool, AREA === 'london' ? 'Manual leads — London' : 'Manual leads');
   let drafted = 0;
   for (const c of rows) {
     if (await rejectIfUndeliverable(pool, c.email, c.id)) continue;
@@ -220,7 +243,7 @@ const nice = (v) => String(v || '').replace(/_/g, ' ').replace(/;/g, ', ');
 
 async function osmCandidates() {
   const area = BOROUGH.replace(/"/g, '');
-  const q = `[out:json][timeout:90];area["name"="${area}"]["boundary"="administrative"]->.a;(nwr(area.a)["amenity"~"^(restaurant|cafe|bar|pub)$"]["name"];nwr(area.a)["office"~"^(${OSM_OFFICES})$"]["name"];);out tags center;`;
+  const q = `[out:json][timeout:90];area["name"="${OSM_NAME.replace(/"/g, '')}"]["boundary"="administrative"]->.a;(nwr(area.a)["amenity"~"^(restaurant|cafe|bar|pub)$"]["name"];nwr(area.a)["office"~"^(${OSM_OFFICES})$"]["name"];);out tags center;`;
   // the public servers are often at capacity (504): a few rounds a minute apart before falling back to the AI
   for (let round = 0; round < 3; round++) for (const url of OVERPASS) {
     if (round && url === OVERPASS[0]) await sleep(60_000);
@@ -275,17 +298,17 @@ async function main() {
     if (sup) return 'suppressed';
     if (await rejectIfUndeliverable(pool, l.email)) return 'undeliverable';
     const { rows: [contact] } = await pool.query(
-      `insert into contacts (business, contact_name, email, phone, address, website, notes, source)
-       values ($1,$2,$3,$4,$5,$6,$7,'ai-discover')
-       on conflict do nothing returning id, business, booking_token`,
+      `insert into contacts (business, contact_name, email, phone, address, website, notes, source, area)
+       values ($1,$2,$3,$4,$5,$6,$7,'ai-discover',$8)
+       on conflict do nothing returning id, business, booking_token, area`,
       [l.business || null, l.contactName || null, l.email, l.phone || null, l.address || null, l.website || null,
-       [l.type, l.about].filter(Boolean).join('\n\n')]
+       [l.type, l.about].filter(Boolean).join('\n\n'), AREA]
     );
     if (!contact) return 'duplicate';
     if (host) knownHosts.add(host);
     let body;
     try {
-      body = ensureSignature(await draftEmailAI(l));
+      body = ensureSignature(await draftEmailAI({ ...l, area: AREA }));
       aiDrafted++;
     } catch (err) {
       if (err.skip) { await skipLead(pool, contact, l.email, err.skip); return 'notDrafted'; }

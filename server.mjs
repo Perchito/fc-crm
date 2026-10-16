@@ -6,7 +6,7 @@ import { runDueSteps, enroll, advance, getSettings, saveSettings } from './lib/e
 import { emailConfigured, sendEmail } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
 import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, sendCustomerCancelEmail, sendReminders, PUBLIC_URL, BOOK_URL } from './lib/booking.mjs';
-import { asyncSafe, errorHandler } from './lib/biz.mjs';
+import { asyncSafe, errorHandler, AREAS, areaOf, inArea } from './lib/biz.mjs';
 import { mountAuth, limiter, requireRole } from './lib/auth.mjs';
 import { customerRoutes } from './lib/customers.mjs';
 import { taskRoutes } from './lib/tasks.mjs';
@@ -68,22 +68,23 @@ app.get(['/book', '/book/manage/:token'], sendBookPage);
 
 app.get('/api/public/slots', limiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
   const cfg = await getBooking(pool);
-  let contact = null, appt = null;
+  let contact = null, appt = null, area = areaOf(req) || 'manchester'; // unknown visitor: ?area=london on the link, else Manchester
   if (req.query.c) {
-    const { rows: [c] } = await pool.query(`select business, contact_name, email, phone, address from contacts where booking_token = $1`, [String(req.query.c)]);
-    contact = c || null;
+    const { rows: [c] } = await pool.query(`select business, contact_name, email, phone, address, area from contacts where booking_token = $1`, [String(req.query.c)]);
+    if (c) ({ area, ...contact } = c);
   }
   if (req.query.r) {
     const { rows: [a] } = await pool.query(
-      `select a.id, a.starts_at, c.business, c.contact_name, c.email, c.phone, c.address from appointments a
+      `select a.id, a.starts_at, c.business, c.contact_name, c.email, c.phone, c.address, c.area from appointments a
        join contacts c on c.id = a.contact_id where a.token = $1 and a.status = 'scheduled'`, [String(req.query.r)]);
-    if (a) { appt = a; contact = { business: a.business, contact_name: a.contact_name, email: a.email, phone: a.phone, address: a.address }; }
+    if (a) { appt = a; area = a.area; contact = { business: a.business, contact_name: a.contact_name, email: a.email, phone: a.phone, address: a.address }; }
   }
   res.json({
     visit_minutes: cfg.visit_minutes,
+    area,
     contact,
     rescheduling: appt ? { starts_at: appt.starts_at } : null,
-    days: await freeSlots(pool, cfg, { excludeApptId: appt?.id }),
+    days: await freeSlots(pool, cfg, { excludeApptId: appt?.id, area }),
   });
 });
 
@@ -105,13 +106,14 @@ app.post('/api/public/book', limiter({ windowMs: 60 * 60_000, max: 10, message: 
     if (b.reschedule) {
       ({ rows: [old] } = await client.query(`select * from appointments where token = $1 and status = 'scheduled'`, [clean(b.reschedule, 64)]));
     }
-    if (!(await isFree(client, cfg, start, old?.id))) {
-      await client.query('rollback');
-      return res.status(409).json({ error: 'Sorry — that time was just taken. Please pick another.' });
-    }
     if (old) ({ rows: [contact] } = await client.query(`select * from contacts where id = $1`, [old.contact_id]));
     if (!contact && b.c) ({ rows: [contact] } = await client.query(`select * from contacts where booking_token = $1`, [clean(b.c, 64)]));
     if (!contact && f.email) ({ rows: [contact] } = await client.query(`select * from contacts where lower(email) = $1`, [f.email]));
+    const area = contact?.area || (AREAS.includes(b.area) ? b.area : 'manchester');
+    if (!(await isFree(client, cfg, start, old?.id, area))) {
+      await client.query('rollback');
+      return res.status(409).json({ error: 'Sorry — that time was just taken. Please pick another.' });
+    }
     if (contact) {
       ({ rows: [contact] } = await client.query(
         `update contacts set contact_name = coalesce(nullif($2,''), contact_name), business = coalesce(nullif($3,''), business),
@@ -119,8 +121,8 @@ app.post('/api/public/book', limiter({ windowMs: 60 * 60_000, max: 10, message: 
          where id = $1 returning *`, [contact.id, f.contact_name, f.business, f.email, f.phone, f.address]));
     } else {
       ({ rows: [contact] } = await client.query(
-        `insert into contacts (contact_name, business, email, phone, address, source) values ($1,$2,nullif($3,''),$4,$5,'booking-page') returning *`,
-        [f.contact_name, f.business || null, f.email, f.phone || null, f.address]));
+        `insert into contacts (contact_name, business, email, phone, address, source, area) values ($1,$2,nullif($3,''),$4,$5,'booking-page',$6) returning *`,
+        [f.contact_name, f.business || null, f.email, f.phone || null, f.address, area]));
     }
     if (old) {
       await client.query(`update appointments set status = 'cancelled' where id = $1`, [old.id]);
@@ -169,7 +171,7 @@ app.get('/cal/:secret.ics', async (req, res) => {
   const cfg = await getBooking(pool);
   const { rows } = await pool.query(
     `select a.*, c.business, c.contact_name, c.phone, c.email, c.address from appointments a join contacts c on c.id = a.contact_id
-     where a.status = 'scheduled' and a.starts_at > now() - interval '60 days' order by a.starts_at`);
+     where a.status = 'scheduled' and a.starts_at > now() - interval '60 days' and ${inArea(areaOf(req), 'c.id')} order by a.starts_at`);
   res.type('text/calendar').set('Cache-Control', 'no-cache').send(buildIcs(rows, cfg.visit_minutes));
 });
 
@@ -232,7 +234,8 @@ app.get('/api/contacts/:id/enrollments', async (req, res) => {
 
 // ── campaigns (sequences) ──────────────────────────────
 app.get('/api/campaigns', async (req, res) => {
-  const { rows: campaigns } = await pool.query('select * from campaigns order by created_at desc');
+  const area = areaOf(req);
+  const { rows: campaigns } = await pool.query('select * from campaigns where $1::text is null or area = $1 order by created_at desc', [area]);
   const { rows: steps } = await pool.query('select * from campaign_steps order by campaign_id, step_index');
   const { rows: counts } = await pool.query(
     `select campaign_id, status, count(*)::int as n from enrollments group by campaign_id, status`
@@ -251,8 +254,8 @@ app.post('/api/campaigns', requireRole('manager'), async (req, res) => {
   try {
     await client.query('begin');
     const { rows: [c] } = await client.query(
-      `insert into campaigns (name, trigger_stage, daily_cap) values ($1,$2,$3) returning *`,
-      [name, trigger_stage || null, daily_cap || 50]
+      `insert into campaigns (name, trigger_stage, daily_cap, area) values ($1,$2,$3,$4) returning *`,
+      [name, trigger_stage || null, daily_cap || 50, areaOf(req) || req.user.area || 'manchester']
     );
     for (const [i, s] of steps.entries()) {
       await client.query(
@@ -329,7 +332,7 @@ app.get('/api/drafts', async (req, res) => {
     `select s.*, c.business, c.contact_name, c.email, c.website, c.address, c.notes, cp.name as campaign_name from sends s
      join contacts c on c.id = s.contact_id
      left join campaigns cp on cp.id = s.campaign_id
-     where s.status = 'draft' order by s.sent_at desc`
+     where s.status = 'draft' and ${inArea(areaOf(req), 'c.id')} order by s.sent_at desc`
   );
   res.json(rows);
 });
@@ -385,7 +388,7 @@ app.post('/api/sends/:id/discard', async (req, res) => {
 
 app.get('/api/activity', async (req, res) => {
   const { rows } = await pool.query(
-    `select e.*, c.business from events e join contacts c on c.id = e.contact_id order by e.at desc limit 15`
+    `select e.*, c.business from events e join contacts c on c.id = e.contact_id where ${inArea(areaOf(req), 'c.id')} order by e.at desc limit 15`
   );
   res.json(rows);
 });
@@ -394,17 +397,19 @@ app.get('/api/activity', async (req, res) => {
 app.get('/api/calendar', async (req, res) => {
   const from = new Date(req.query.from), to = new Date(req.query.to);
   if (isNaN(from) || isNaN(to)) return res.status(400).json({ error: 'from and to required' });
-  const { rows: blocks } = await pool.query(`select * from blocks where starts_at < $2 and ends_at > $1 order by starts_at`, [from, to]);
+  const area = areaOf(req);
+  const { rows: blocks } = await pool.query(`select * from blocks where starts_at < $2 and ends_at > $1 and ($3::text is null or area = $3) order by starts_at`, [from, to, area]);
   const { rows: appts } = await pool.query(
-    `select a.*, c.business, c.contact_name, c.address from appointments a join contacts c on c.id = a.contact_id
-     where a.status = 'scheduled' and a.starts_at < $2 and a.starts_at >= $1::timestamptz - interval '1 day' order by a.starts_at`, [from, to]);
+    `select a.*, c.business, c.contact_name, c.address, c.area from appointments a join contacts c on c.id = a.contact_id
+     where a.status = 'scheduled' and a.starts_at < $2 and a.starts_at >= $1::timestamptz - interval '1 day' and ${inArea(area, 'c.id')} order by a.starts_at`, [from, to]);
   res.json({ blocks, appointments: appts });
 });
 
 app.post('/api/blocks', async (req, res) => {
   const { starts_at, ends_at, title } = req.body;
   if (!(new Date(ends_at) > new Date(starts_at))) return res.status(400).json({ error: 'end must be after start' });
-  const { rows } = await pool.query(`insert into blocks (starts_at, ends_at, title) values ($1,$2,$3) returning *`, [starts_at, ends_at, title || 'Busy']);
+  const { rows } = await pool.query(`insert into blocks (starts_at, ends_at, title, area) values ($1,$2,$3,$4) returning *`,
+    [starts_at, ends_at, title || 'Busy', areaOf(req) || req.user.area || 'manchester']);
   res.status(201).json(rows[0]);
 });
 
@@ -427,14 +432,15 @@ app.post('/api/blocks/copy-week', async (req, res) => {
   const from = new Date(req.body.from), to = new Date(req.body.to);
   if (isNaN(from) || isNaN(to)) return res.status(400).json({ error: 'from and to required' });
   const { rowCount } = await pool.query(
-    `insert into blocks (starts_at, ends_at, title)
-     select starts_at + ($2::timestamptz - $1::timestamptz), ends_at + ($2::timestamptz - $1::timestamptz), title
-     from blocks where starts_at >= $1 and starts_at < $1::timestamptz + interval '7 days'`, [from, to]);
+    `insert into blocks (starts_at, ends_at, title, area)
+     select starts_at + ($2::timestamptz - $1::timestamptz), ends_at + ($2::timestamptz - $1::timestamptz), title, area
+     from blocks where starts_at >= $1 and starts_at < $1::timestamptz + interval '7 days' and ($3::text is null or area = $3)`, [from, to, areaOf(req)]);
   res.json({ copied: rowCount });
 });
 
 app.get('/api/booking-settings', async (req, res) => {
-  res.json({ ...(await getBooking(pool)), booking_url: BOOK_URL, ics_url: `${PUBLIC_URL}/cal/${await icsSecret(pool)}.ics` });
+  const q = areaOf(req) ? `?area=${areaOf(req)}` : '';
+  res.json({ ...(await getBooking(pool)), booking_url: `${BOOK_URL}${q}`, ics_url: `${PUBLIC_URL}/cal/${await icsSecret(pool)}.ics${q}` });
 });
 app.put('/api/booking-settings', requireRole('manager'), async (req, res) => res.json(await saveBooking(pool, req.body)));
 

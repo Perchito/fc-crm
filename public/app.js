@@ -11,12 +11,17 @@ const STAGE_LABEL = Object.fromEntries(STAGES);
 let contacts = [];
 let BOOK_URL = 'https://book.fccleaningcompany.com'; // customer booking page (personal link adds ?c=<token>); real value from the server below
 
+// Manchester (Fernando) / London (Luis): the area being viewed goes on every call as X-FC-Area ('' = all).
+// Remembered per browser; the first visit opens on the signed-in person's own area (set in biz.js init).
+let AREA = (() => { try { return localStorage.getItem('fc-area'); } catch { return null; } })();
+const AREA_LABEL = { manchester: 'Manchester', london: 'London' };
+
 // every call carries the CSRF header; an expired session goes back to the sign-in page;
 // errors carry the server's readable message (and .data, e.g. a list of problems)
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', 'X-FC-CSRF': '1', ...(opts && opts.headers) },
+    headers: { 'Content-Type': 'application/json', 'X-FC-CSRF': '1', ...(AREA ? { 'X-FC-Area': AREA } : {}), ...(opts && opts.headers) },
   });
   if (res.status === 401) { location.href = '/login'; throw new Error('Signed out'); }
   if (!res.ok) {
