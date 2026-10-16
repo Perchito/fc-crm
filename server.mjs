@@ -7,6 +7,7 @@ import { emailConfigured, sendEmail } from './lib/mailer.mjs';
 import { smsConfigured } from './lib/sms.mjs';
 import { getBooking, saveBooking, freeSlots, isFree, icsSecret, buildIcs, sendBookingEmails, sendCancelEmail, sendCustomerCancelEmail, sendReminders, PUBLIC_URL, BOOK_URL } from './lib/booking.mjs';
 import { asyncSafe, errorHandler, AREAS, areaOf, inArea } from './lib/biz.mjs';
+import { senderFor, firstName } from './lib/signature.mjs';
 import { mountAuth, limiter, requireRole } from './lib/auth.mjs';
 import { customerRoutes } from './lib/customers.mjs';
 import { taskRoutes } from './lib/tasks.mjs';
@@ -82,6 +83,7 @@ app.get('/api/public/slots', limiter({ windowMs: 60_000, max: 60 }), async (req,
   res.json({
     visit_minutes: cfg.visit_minutes,
     area,
+    who: area === 'london' && !senderFor('london').from ? null : firstName(area), // null = "we" (London before Daniel's mailbox)
     contact,
     rescheduling: appt ? { starts_at: appt.starts_at } : null,
     days: await freeSlots(pool, cfg, { excludeApptId: appt?.id, area }),
@@ -357,12 +359,12 @@ app.patch('/api/sends/:id', async (req, res) => {
 
 app.post('/api/sends/:id/send', async (req, res) => {
   const { rows: [draft] } = await pool.query(
-    `select s.*, c.email, c.pipeline_stage from sends s join contacts c on c.id = s.contact_id where s.id = $1 and s.status = 'draft'`,
+    `select s.*, c.email, c.pipeline_stage, c.area from sends s join contacts c on c.id = s.contact_id where s.id = $1 and s.status = 'draft'`,
     [req.params.id]
   );
   if (!draft) return res.status(404).json({ error: 'not found or already sent' });
   try {
-    await sendEmail({ to: draft.email, subject: draft.subject, text: draft.body });
+    await sendEmail({ from: senderFor(draft.area).from, to: draft.email, subject: draft.subject, text: draft.body });
     await pool.query(`update sends set status = 'sent', sent_at = now() where id = $1`, [draft.id]);
     // AI-discovery campaigns: the draft is step 0, so move the enrollment on (completes it unless follow-up steps exist)
     if (draft.enrollment_id) {

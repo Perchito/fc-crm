@@ -143,7 +143,7 @@ async function campaignNamed(pool, name) {
   const { rows: [c] } = await pool.query(`insert into campaigns (name, area) values ($1,$2) returning id`, [name, AREA]);
   await pool.query(
     `insert into campaign_steps (campaign_id, step_index, channel, wait_days, subject_tmpl, body_tmpl) values ($1,1,'email',$2,$3,$4)`,
-    [c.id, FOLLOW_UP.wait_days, FOLLOW_UP.subject_tmpl, withSignature(FOLLOW_UP.body_tmpl)]
+    [c.id, FOLLOW_UP.wait_days, FOLLOW_UP.subject_tmpl, withSignature(FOLLOW_UP.body_tmpl, AREA)]
   );
   return c.id;
 }
@@ -222,11 +222,11 @@ async function draftManualLeads(pool) {
       catch (err) { console.error(`profile failed for ${c.business}:`, err.message || err); }
     }
     let body;
-    try { body = ensureSignature(await draftEmailAI(c)); }
+    try { body = ensureSignature(await draftEmailAI(c), c.area); }
     catch (err) {
       if (err.skip) { await skipLead(pool, c, c.email, err.skip); continue; }
       console.error(`draft failed for ${c.business}, using template:`, err.message || err);
-      body = ensureSignature(bodyFor(c));
+      body = ensureSignature(bodyFor(c), c.area);
     }
     await addDraft(pool, campaignId, c, body);
     drafted++;
@@ -308,12 +308,12 @@ async function main() {
     if (host) knownHosts.add(host);
     let body;
     try {
-      body = ensureSignature(await draftEmailAI({ ...l, area: AREA }));
+      body = ensureSignature(await draftEmailAI({ ...l, area: AREA }), AREA);
       aiDrafted++;
     } catch (err) {
       if (err.skip) { await skipLead(pool, contact, l.email, err.skip); return 'notDrafted'; }
       console.error(`draft failed for ${contact.business}, using template:`, err.message || err);
-      body = ensureSignature(bodyFor(contact));
+      body = ensureSignature(bodyFor(contact), AREA);
     }
     await addDraft(pool, campaignId, contact, body);
     inserted++;

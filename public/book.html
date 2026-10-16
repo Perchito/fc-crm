@@ -142,10 +142,8 @@ async function showBooking() {
   if (params.get('area')) q.set('area', params.get('area'));
   try { data = await api(`/api/public/slots?${q}`); }
   catch (e) { app.innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
-  if (data.area === 'london') { // London visits are Luis's, so no "Fernando will come"
-    $('#region').textContent = 'Commercial cleaning · London';
-    $('#lead').textContent = "Pick a time that suits you. We'll come and have a look round, talk through what you need, and send you a free written quote.";
-  }
+  if (data.area === 'london') $('#region').textContent = 'Commercial cleaning · London';
+  if (data.who !== 'Fernando') $('#lead').textContent = `Pick a time that suits you. ${data.who ? `${data.who} will` : "We'll"} come and have a look round, talk through what you need, and send you a free written quote.`;
   if (data.rescheduling) {
     $('#h1').textContent = 'Choose a new time';
     $('#lead').textContent = `Your visit is currently booked for ${fmtLong(data.rescheduling.starts_at)}. Pick a new time below — the old one is released once you confirm.`;
@@ -175,7 +173,7 @@ function render() {
       <div class="times" role="group" aria-label="Times">${day.slots.map((s) => `<button type="button" class="time" data-slot="${s}" aria-pressed="${s === slot}">${fmtTime(s)}</button>`).join('')}</div>
     </div>
     <div class="step" ${slot ? '' : 'hidden'} id="details">
-      <h2>3. Your details</h2><p class="sub">${data.rescheduling ? 'Check these are still right.' : `So ${data.area === 'london' ? 'we know' : 'Fernando knows'} where to go and how to reach you.`}</p>
+      <h2>3. Your details</h2><p class="sub">${data.rescheduling ? 'Check these are still right.' : `So ${data.who ? `${data.who} knows` : 'we know'} where to go and how to reach you.`}</p>
       <form id="f" novalidate>
         <div><label for="name">Your name</label><input id="name" autocomplete="name" required value="${esc(c.contact_name)}"></div>
         <div><label for="business">Business name <i>(optional)</i></label><input id="business" autocomplete="organization" value="${esc(c.business)}"></div>
@@ -221,7 +219,7 @@ async function submit(e) {
     app.innerHTML = `<div class="done"><div class="tick">${ICON_TICK}</div>
       <h2>${esc(fmtLong(r.starts_at))}</h2>
       <p class="muted">${esc(v('address'))}</p>
-      <p class="muted">${v('email') ? `A confirmation is on its way to ${esc(v('email'))}.` : `${data.area === 'london' ? 'We' : 'Fernando'} will be in touch to confirm.`}</p>
+      <p class="muted">${v('email') ? `A confirmation is on its way to ${esc(v('email'))}.` : `${data.who || 'We'} will be in touch to confirm.`}</p>
       <div class="actions"><a class="btn ghost" href="${BASE}/manage/${r.token}">Change or cancel</a></div></div>`;
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (ex) {
